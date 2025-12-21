@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025 Tinfoil Inc
+# SPDX-License-Identifier: Apache-2.0
 import os
 import sys
 import struct

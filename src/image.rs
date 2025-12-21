@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2025 Phala Network
+ * Copyright (c) 2025 Tinfoil Inc
+ * SPDX-License-Identifier: Apache-2.0
+ */
 use crate::{measure_log, measure_sha384, util::{debug_print_log, authenticode_sha384_hash}};
 use anyhow::{bail, Context, Result};
 use std::fs;

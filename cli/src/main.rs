@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025 Phala Network
+ * Copyright (c) 2025 Tinfoil Inc
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use tdx_measure::{Machine, ImageConfig};

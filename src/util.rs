@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2025 Phala Network
+ * Copyright (c) 2025 Tinfoil Inc
+ * SPDX-License-Identifier: Apache-2.0
+ */
 use log::debug;
 use sha2::{Digest, Sha384};
 use crate::{num::read_le};

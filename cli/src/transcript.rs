@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2025 Tinfoil Inc
+ * SPDX-License-Identifier: Apache-2.0
+ */
 use std::io::Write;
 use std::process::Command;
 use anyhow::{Context, Result, anyhow};
