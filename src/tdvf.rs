@@ -114,7 +114,7 @@ fn parse_boot_order(machine: &Machine) -> Result<(Vec<u8>, Vec<u16>)> {
 
 /// Loads boot variable data if the corresponding file exists
 fn load_boot_variable_if_exists(boot_entry_num: u16, machine: &Machine) -> Result<Option<Vec<u8>>> {
-    let filename = format!("{}Boot{:04}.bin", machine.path_boot_xxxx, boot_entry_num);
+    let filename = format!("{}/Boot{:04X}.bin", machine.path_boot_xxxx, boot_entry_num);
     // Try to read the file, return None if it doesn't exist
     match read_file_data(&filename) {
         Ok(data) => Ok(Some(data)),
