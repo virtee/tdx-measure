@@ -51,117 +51,7 @@ impl Machine<'_> {
         let loader: Vec<u8> = if !self.table_loader.is_empty() {
             read_file_data(self.table_loader)?
         } else {
-            let (dsdt_offset, dsdt_csum, dsdt_len) = find_acpi_table(&tables , "DSDT")?;
-            let (facp_offset, facp_csum, facp_len) = find_acpi_table(&tables , "FACP")?;
-            let (apic_offset, apic_csum, apic_len) = find_acpi_table(&tables , "APIC")?;
-            let (mcfg_offset, mcfg_csum, mcfg_len) = find_acpi_table(&tables , "MCFG")?;
-            let (waet_offset, waet_csum, waet_len) = find_acpi_table(&tables , "WAET")?;
-            let (rsdt_offset, rsdt_csum, rsdt_len) = find_acpi_table(&tables , "RSDT")?;
-            let mut loader: TableLoader = TableLoader::new();
-            loader.append(LoaderCmd::Allocate {
-                file: "etc/acpi/rsdp",
-                alignment: 16,
-                zone: 2,
-            });
-            loader.append(LoaderCmd::Allocate {
-                file: "etc/acpi/tables",
-                alignment: 64,
-                zone: 1,
-            });
-            loader.append(LoaderCmd::AddChecksum {
-                file: "etc/acpi/tables",
-                result_offset: dsdt_csum,
-                start: dsdt_offset,
-                length: dsdt_len,
-            });
-            loader.append(LoaderCmd::AddPtr {
-                pointer_file: "etc/acpi/tables",
-                pointee_file: "etc/acpi/tables",
-                pointer_offset: facp_offset + 36,
-                pointer_size: 4,
-            });
-            loader.append(LoaderCmd::AddPtr {
-                pointer_file: "etc/acpi/tables",
-                pointee_file: "etc/acpi/tables",
-                pointer_offset: facp_offset + 40,
-                pointer_size: 4,
-            });
-            loader.append(LoaderCmd::AddPtr {
-                pointer_file: "etc/acpi/tables",
-                pointee_file: "etc/acpi/tables",
-                pointer_offset: facp_offset + 140,
-                pointer_size: 8,
-            });
-            loader.append(LoaderCmd::AddChecksum {
-                file: "etc/acpi/tables",
-                result_offset: facp_csum,
-                start: facp_offset,
-                length: facp_len,
-            });
-            loader.append(LoaderCmd::AddChecksum {
-                file: "etc/acpi/tables",
-                result_offset: apic_csum,
-                start: apic_offset,
-                length: apic_len,
-            });
-            loader.append(LoaderCmd::AddChecksum {
-                file: "etc/acpi/tables",
-                result_offset: mcfg_csum,
-                start: mcfg_offset,
-                length: mcfg_len,
-            });
-            loader.append(LoaderCmd::AddChecksum {
-                file: "etc/acpi/tables",
-                result_offset: waet_csum,
-                start: waet_offset,
-                length: waet_len,
-            });
-            loader.append(LoaderCmd::AddPtr {
-                pointer_file: "etc/acpi/tables",
-                pointee_file: "etc/acpi/tables",
-                pointer_offset: rsdt_offset + 36,
-                pointer_size: 4,
-            });
-            loader.append(LoaderCmd::AddPtr {
-                pointer_file: "etc/acpi/tables",
-                pointee_file: "etc/acpi/tables",
-                pointer_offset: rsdt_offset + 40,
-                pointer_size: 4,
-            });
-            loader.append(LoaderCmd::AddPtr {
-                pointer_file: "etc/acpi/tables",
-                pointee_file: "etc/acpi/tables",
-                pointer_offset: rsdt_offset + 44,
-                pointer_size: 4,
-            });
-            loader.append(LoaderCmd::AddPtr {
-                pointer_file: "etc/acpi/tables",
-                pointee_file: "etc/acpi/tables",
-                pointer_offset: rsdt_offset + 48,
-                pointer_size: 4,
-            });
-            loader.append(LoaderCmd::AddChecksum {
-                file: "etc/acpi/tables",
-                result_offset: rsdt_csum,
-                start: rsdt_offset,
-                length: rsdt_len,
-            });
-            loader.append(LoaderCmd::AddPtr {
-                pointer_file: "etc/acpi/rsdp",
-                pointee_file: "etc/acpi/tables",
-                pointer_offset: 16,
-                pointer_size: 4,
-            });
-            loader.append(LoaderCmd::AddChecksum {
-                file: "etc/acpi/rsdp",
-                result_offset: 8,
-                start: 0,
-                length: 20,
-            });
-            if loader.buffer.len() < LDR_LENGTH {
-                loader.buffer.resize(LDR_LENGTH, 0);
-            }
-            loader.buffer
+            derive_table_loader(&tables)?
         };
 
         Ok(Tables {
@@ -170,6 +60,136 @@ impl Machine<'_> {
             loader,
         })
     }
+}
+
+/// Walks the concatenated ACPI tables blob exposed by QEMU via `etc/acpi/tables`
+/// and returns one entry per System Description Table found in it, in file order.
+/// Each tuple is `(signature, offset, csum_offset, length)` where `csum_offset`
+/// is the byte offset of the table's `Checksum` field (header offset 9).
+fn list_acpi_tables(tables: &[u8]) -> Result<Vec<([u8; 4], u32, u32, u32)>> {
+    let mut out = Vec::new();
+    let mut off = 0usize;
+    while off + 8 <= tables.len() {
+        let sig: [u8; 4] = tables[off..off + 4].try_into().unwrap();
+        if !sig.iter().all(|b| (32..127).contains(b)) {
+            break;
+        }
+        let len = u32::from_le_bytes(tables[off + 4..off + 8].try_into().unwrap()) as usize;
+        if len < 8 || off + len > tables.len() {
+            bail!("ACPI table at offset {off:#x} has invalid length {len}");
+        }
+        out.push((sig, off as u32, (off + 9) as u32, len as u32));
+        off += len;
+    }
+    Ok(out)
+}
+
+/// Build the QEMU table-loader blob (`etc/table-loader`) from a concatenated ACPI
+/// tables image. The command order mirrors what QEMU's `acpi_build` emits today:
+///   Allocate rsdp + Allocate tables
+///   AddChecksum DSDT
+///   AddPtr FACP→FACS, FACP→DSDT (4-byte), FACP→DSDT (8-byte X_DSDT)
+///   AddChecksum FACP
+///   AddChecksum {APIC, HPET, MCFG, WAET, ...} in file order
+///   AddPtr RSDT→entry_i for each 4-byte entry (one per non-DSDT table)
+///   AddChecksum RSDT
+///   AddPtr RSDP→RSDT, AddChecksum RSDP
+fn derive_table_loader(tables: &[u8]) -> Result<Vec<u8>> {
+    const TABLES_FILE: &str = "etc/acpi/tables";
+    const RSDP_FILE: &str = "etc/acpi/rsdp";
+
+    let list = list_acpi_tables(tables)?;
+
+    let find = |sig: &str| -> Result<(u32, u32, u32)> {
+        list.iter()
+            .find(|(s, ..)| s.as_slice() == sig.as_bytes())
+            .map(|&(_, off, csum, len)| (off, csum, len))
+            .ok_or_else(|| anyhow!("Required ACPI table missing: {sig}"))
+    };
+    let (dsdt_offset, dsdt_csum, dsdt_len) = find("DSDT")?;
+    let (facp_offset, facp_csum, facp_len) = find("FACP")?;
+    let (rsdt_offset, rsdt_csum, rsdt_len) = find("RSDT")?;
+
+    let mut loader = TableLoader::new();
+    loader.append(LoaderCmd::Allocate { file: RSDP_FILE, alignment: 16, zone: 2 });
+    loader.append(LoaderCmd::Allocate { file: TABLES_FILE, alignment: 64, zone: 1 });
+    loader.append(LoaderCmd::AddChecksum {
+        file: TABLES_FILE,
+        result_offset: dsdt_csum,
+        start: dsdt_offset,
+        length: dsdt_len,
+    });
+    for ptr_offset in [36u32, 40] {
+        loader.append(LoaderCmd::AddPtr {
+            pointer_file: TABLES_FILE,
+            pointee_file: TABLES_FILE,
+            pointer_offset: facp_offset + ptr_offset,
+            pointer_size: 4,
+        });
+    }
+    loader.append(LoaderCmd::AddPtr {
+        pointer_file: TABLES_FILE,
+        pointee_file: TABLES_FILE,
+        pointer_offset: facp_offset + 140,
+        pointer_size: 8,
+    });
+    loader.append(LoaderCmd::AddChecksum {
+        file: TABLES_FILE,
+        result_offset: facp_csum,
+        start: facp_offset,
+        length: facp_len,
+    });
+    // Non-DSDT/FACP/RSDT secondary tables in their file order, e.g. APIC, HPET,
+    // MCFG, WAET. FACS lives in the same blob but has no Checksum slot and is
+    // wired to FACP via the FIRMWARE_CTRL pointer above, so skip it here.
+    for (sig, off, csum, len) in &list {
+        if matches!(sig.as_slice(), b"FACS" | b"DSDT" | b"FACP" | b"RSDT") {
+            continue;
+        }
+        loader.append(LoaderCmd::AddChecksum {
+            file: TABLES_FILE,
+            result_offset: *csum,
+            start: *off,
+            length: *len,
+        });
+    }
+    // RSDT lists every non-DSDT table; emit one 4-byte AddPtr per entry slot.
+    const RSDT_HEADER_LEN: u32 = 36;
+    if rsdt_len < RSDT_HEADER_LEN || (rsdt_len - RSDT_HEADER_LEN) % 4 != 0 {
+        bail!("Malformed RSDT length: {rsdt_len}");
+    }
+    let rsdt_entries = (rsdt_len - RSDT_HEADER_LEN) / 4;
+    for i in 0..rsdt_entries {
+        loader.append(LoaderCmd::AddPtr {
+            pointer_file: TABLES_FILE,
+            pointee_file: TABLES_FILE,
+            pointer_offset: rsdt_offset + RSDT_HEADER_LEN + i * 4,
+            pointer_size: 4,
+        });
+    }
+    loader.append(LoaderCmd::AddChecksum {
+        file: TABLES_FILE,
+        result_offset: rsdt_csum,
+        start: rsdt_offset,
+        length: rsdt_len,
+    });
+    loader.append(LoaderCmd::AddPtr {
+        pointer_file: RSDP_FILE,
+        pointee_file: TABLES_FILE,
+        pointer_offset: 16,
+        pointer_size: 4,
+    });
+    loader.append(LoaderCmd::AddChecksum {
+        file: RSDP_FILE,
+        result_offset: 8,
+        start: 0,
+        length: 20,
+    });
+
+    if loader.buffer.len() < LDR_LENGTH {
+        loader.buffer.resize(LDR_LENGTH, 0);
+    }
+    Ok(loader.buffer)
 }
 
 /// An enum to represent the different QEMU loader commands in a type-safe way.
