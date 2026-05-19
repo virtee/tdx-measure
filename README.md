@@ -27,7 +27,7 @@ This project is a fork of dstack-mr from the [Dstack-TEE/dstack](https://github.
       --platform-only                       Compute MRTD and RTMR0 only
       --runtime-only                        Compute RTMR1 and RTMR2 only
       --transcript <TRANSCRIPT>             Generate a human-readable transcript of all metadata files and write to the specified file
-      --create-acpi-tables <DISTRIBUTION>   Generate ACPI tables for direct boot mode. Only valid with direct boot. [possible values: ubuntu:25.04]
+      --create-acpi-tables <DISTRIBUTION>   Generate ACPI tables for direct boot mode. Only valid with direct boot. [possible values: ubuntu:25.04, ubuntu:26.04]
   -h, --help                                Print help
   -V, --version                             Print version
 ```

@@ -13,11 +13,18 @@ readonly CONTAINER_NAME="acpi-tables-generator"
 readonly IMAGE_NAME="acpi-tables-generator"
 
 # Supported distributions
-readonly SUPPORTED_DISTROS=("ubuntu:25.04")
+readonly SUPPORTED_DISTROS=("ubuntu:25.04" "ubuntu:26.04")
 
-# QEMU version mapping for each distribution
+# QEMU source + version mapping per distribution.
+# - ubuntu:25.04: Intel TDX-enabled QEMU 9.2.1 from ppa:kobuk-team/tdx-release
+# - ubuntu:26.04: stock QEMU 10.2.x from Ubuntu's main archive (includes the CEJL
+#   multi-eject hotplug feature that newer guest ACPI tables expect).
+declare -A QEMU_SOURCES
 declare -A QEMU_VERSIONS
+QEMU_SOURCES["ubuntu:25.04"]="ppa"
 QEMU_VERSIONS["ubuntu:25.04"]="1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2"
+QEMU_SOURCES["ubuntu:26.04"]="main"
+QEMU_VERSIONS["ubuntu:26.04"]=""  # let pull-lp-source pick the current main-archive version
 
 # Color codes for output
 readonly RED='\033[0;31m'
@@ -197,19 +204,24 @@ build_docker_image() {
     # Get path to Dockerfile
     local DOCKERFILE_PATH="$SCRIPT_DIR/Dockerfile.qemu-acpi-dump"
 
-    # Get QEMU version for the distribution
+    local QEMU_SOURCE="${QEMU_SOURCES[$DISTRIBUTION]}"
     local QEMU_VERSION="${QEMU_VERSIONS[$DISTRIBUTION]}"
-    if [[ -z "$QEMU_VERSION" ]]; then
-        log_error "No QEMU version defined for distribution: $DISTRIBUTION"
+    if [[ -z "$QEMU_SOURCE" ]]; then
+        log_error "No QEMU source defined for distribution: $DISTRIBUTION"
         exit 1
     fi
-    log_info "Using QEMU version: $QEMU_VERSION"
+    case "$QEMU_SOURCE" in
+        ppa)  log_info "QEMU source: ppa:kobuk-team/tdx-release (Intel TDX-patched QEMU ${QEMU_VERSION}) on ${DISTRIBUTION}" ;;
+        main) log_info "QEMU source: ${DISTRIBUTION} main archive (${QEMU_VERSION:-latest})" ;;
+        *)    log_info "QEMU source: $QEMU_SOURCE (${QEMU_VERSION:-?})" ;;
+    esac
 
     # Build Docker image
     if ! docker build \
         --progress plain \
         --tag "$IMAGE_NAME" \
         --build-arg "DISTRIBUTION=$DISTRIBUTION" \
+        --build-arg "QEMU_SOURCE=$QEMU_SOURCE" \
         --build-arg "QEMU_VERSION=$QEMU_VERSION" \
         --build-arg "USER=$USER" \
         --build-arg "ACPI_TABLES_NAME=$(basename "$ACPI_TABLES_PATH")" \
@@ -225,9 +237,12 @@ build_docker_image() {
 # Run QEMU container to generate ACPI tables
 generate_acpi_tables() {
     log_info "Running QEMU container to generate ACPI tables..."
-    log_warning "NOTE: You may see ROM file errors (kvmvapic.bin, linuxboot_dma.bin) - these can be safely ignored."
-    log_warning "This script uses QEMU source from ppa:kobuk-team/tdx-release PPA which provides Intel TDX-enabled QEMU."
-    log_warning "Some upstream BIOS files are missing in this QEMU source but are not required for ACPI table generation."
+    # The Dockerfile skips `subdir('pc-bios')` in QEMU's meson build (the option
+    # ROMs aren't needed to dump ACPI tables and adding them ~doubles image size).
+    # As a result QEMU prints "rom: file kvmvapic.bin … No such file or directory"
+    # (and similar for `linuxboot_dma.bin` if a PCI NIC is in play) on every run.
+    # They are harmless — the ACPI dump runs before any ROM would be loaded.
+    log_warning "NOTE: harmless ROM-file errors (kvmvapic.bin, linuxboot_dma.bin, ...) from QEMU are expected; pc-bios is skipped in the patched build."
 
     # Construct QEMU arguments using minimal QEMU arguments from Canonical's direct boot script
     # https://github.com/canonical/tdx/blob/3.3/guest-tools/direct-boot/boot_direct.sh#L54

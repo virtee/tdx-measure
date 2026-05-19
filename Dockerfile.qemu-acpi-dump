@@ -4,7 +4,11 @@
 ARG DISTRIBUTION=ubuntu:25.04
 FROM ${DISTRIBUTION}
 
-ARG QEMU_VERSION
+# QEMU_SOURCE selects how the source tarball is fetched:
+#   "ppa"  -> pull-ppa-source from ppa:kobuk-team/tdx-release (Intel TDX QEMU build for 24.04/25.04)
+#   "main" -> pull-lp-source from the distribution's main archive
+ARG QEMU_SOURCE=ppa
+ARG QEMU_VERSION=
 ARG ACPI_TABLES_NAME
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -16,12 +20,19 @@ RUN apt-get update && \
         ubuntu-dev-tools \
         libglib2.0-dev \
         meson \
+        ninja-build \
         python3-venv && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Download QEMU source from Canonicals ppa:kobuk-team/tdx-release pacakge repository, which provides Intel TDX-enabled QEMU builds for Ubuntu 24.04 and 25.04
-RUN pull-ppa-source --ppa ppa:kobuk-team/tdx-release qemu ${QEMU_VERSION}
+WORKDIR /
+RUN if [ "$QEMU_SOURCE" = "ppa" ]; then \
+        pull-ppa-source --ppa ppa:kobuk-team/tdx-release qemu ${QEMU_VERSION}; \
+    elif [ "$QEMU_SOURCE" = "main" ]; then \
+        pull-lp-source qemu ${QEMU_VERSION}; \
+    else \
+        echo "Unknown QEMU_SOURCE: $QEMU_SOURCE"; exit 1; \
+    fi
 
 RUN QEMU_WRK_DIR=$(find / -maxdepth 1 -type d -name "qemu*" | head -n 1) && \
     echo "Found QEMU directory: $QEMU_WRK_DIR" && \
@@ -39,9 +50,11 @@ ARG acpi_build_c="hw/i386/acpi-build.c"
 ARG acpi_common_c="hw/i386/acpi-common.c"
 ARG meson_build="meson.build"
 
+# The subdir('tests') reference moved inside an `if want_tools` block in QEMU 10.x and is now indented;
+# match optional leading whitespace so both layouts get commented out alongside subdir('pc-bios').
 RUN perl -i -0pe 's/(acpi_build_update\(void \*build_opaque\)[\s\S]*?acpi_build\([^;]*;)/\1'"$acpi_tables_dump_loc"'/gs' "$acpi_build_c" && \
     perl -i -pe 's/x86ms->eoi_intercept_unsupported;/1;/g' "$acpi_build_c" "$acpi_common_c" && \
-    perl -i -pe "s/(^subdir\('pc-bios'\)|^subdir\('tests'\))/# \1/g" "$meson_build"
+    perl -i -pe "s/^(\s*)(subdir\('pc-bios'\)|subdir\('tests'\))/\$1# \$2/g" "$meson_build"
 
 # Configure QEMU with minimal features to reduce build time and image size - only KVM acceleration is needed for ACPI table generation
 RUN ./configure \
