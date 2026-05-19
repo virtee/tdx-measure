@@ -27,7 +27,11 @@ This project is a fork of dstack-mr from the [Dstack-TEE/dstack](https://github.
       --platform-only                       Compute MRTD and RTMR0 only
       --runtime-only                        Compute RTMR1 and RTMR2 only
       --transcript <TRANSCRIPT>             Generate a human-readable transcript of all metadata files and write to the specified file
-      --create-acpi-tables <DISTRIBUTION>   Generate ACPI tables for direct boot mode. Only valid with direct boot. [possible values: ubuntu:25.04, ubuntu:26.04]
+      --create-acpi-tables <DISTRIBUTION> [<QEMU_VERSION>]
+                                            Generate ACPI tables for direct boot mode. Only valid with direct boot.
+                                            <DISTRIBUTION> in {ubuntu:25.04, ubuntu:26.04}.
+                                            <QEMU_VERSION> overrides the pinned QEMU source-package version for the given distribution
+                                            (pass `""` to fetch the current main-archive tip).
   -h, --help                                Print help
   -V, --version                             Print version
 ```
@@ -79,7 +83,7 @@ Create `metadata.json` file with the below metadata:
     Alternatively, a file containing the RSDP can be extracted by running the [`extract_config_files.py`](extract_config_files.py) script inside a TD, which is configured identically to the target configuration.
     In this case, the extracted file can be provided with this flag.
 
-- `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`. Each field is a thin pass-through to QEMU. When present, `create_acpi_tables.sh` builds the QEMU command from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`). When absent, the script falls back to the Canonical direct-boot args. Fields:
+- `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`. Each field is a thin pass-through to QEMU. When present, the QEMU command is built from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`). When absent, the tool falls back to the Canonical direct-boot args. Fields:
   - `machine` *(required when block is present)*: value passed verbatim to `-machine`, e.g. `"q35,kernel_irqchip=split,memory-backend=mem0,smm=off,pic=off"`.
   - `cpu` *(optional, default `"host"`)*: value passed verbatim to `-cpu`. Use a named model with an explicit `phys-bits=N` (e.g. `"Skylake-Server,phys-bits=46"`) to make the run independent of the host CPU.
   - `accel` *(optional, default `"kvm"`)*: value passed verbatim to `-accel`. Use `"tcg"` to skip KVM (CI runners without `/dev/kvm`, ARM hosts via x86 emulation, …).
@@ -99,6 +103,25 @@ Create `metadata.json` file with the below metadata:
 
 Note: For direct boot, `boot_order` and `path_boot_xxxx` do not need to be specified in the metadata file, as there is only one standardized BootOrder variable and a corresponding Boot#### UEFI variable.
 These are calculated by the tool automatically.
+
+#### Generating ACPI tables
+
+When `--create-acpi-tables` is passed, the tool builds a small Docker image that
+patches QEMU to dump `etc/acpi/tables` and exits before TD entry. This requires
+a working `docker` (with buildx) and, when `accel: "kvm"` is in effect, KVM on
+the host. Each supported distribution pins a known-good QEMU source version
+(`1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2` for `ubuntu:25.04`, `1:10.2.1+ds-1ubuntu4`
+for `ubuntu:26.04`) so the same metadata + CLI produces the same ACPI bytes
+regardless of when the regen runs. Pass an explicit version as the second
+positional value of `--create-acpi-tables` to override the pin (e.g. to validate
+an SRU), or `""` to opt into whatever `pull-lp-source` currently picks from the
+main archive:
+
+```
+--create-acpi-tables ubuntu:26.04                              # default pin
+--create-acpi-tables ubuntu:26.04 1:10.2.1+ds-1ubuntu5         # explicit version
+--create-acpi-tables ubuntu:26.04 ""                           # current main-archive tip
+```
 
 ### Indirect Boot
 

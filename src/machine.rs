@@ -33,6 +33,7 @@ pub struct Machine<'a> {
     pub metadata_path: &'a Path,
     pub create_acpi_table: bool,
     pub distribution: &'a str,
+    pub qemu_version: Option<&'a str>,
 }
 
 impl Machine<'_> {

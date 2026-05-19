@@ -44,9 +44,13 @@ struct Cli {
     #[arg(long)]
     transcript: Option<PathBuf>,
 
-    /// Generate ACPI tables for direct boot and a specific distribution, e.g., ubuntu:25.04
-    #[arg(long)]
-    create_acpi_tables: Option<String>,
+    /// Generate ACPI tables for direct boot. First value is the distribution
+    /// (e.g. ubuntu:25.04, ubuntu:26.04); the optional second value pins a
+    /// specific QEMU source-package version and otherwise defaults to the
+    /// distribution's pinned version. Pass `""` for the version to opt into
+    /// `pull-lp-source`'s current main-archive pick.
+    #[arg(long, num_args = 1..=2, value_names = ["DISTRIBUTION", "QEMU_VERSION"])]
+    create_acpi_tables: Option<Vec<String>>,
 }
 
 /// Helper struct to resolve and store file paths
@@ -127,7 +131,14 @@ impl PathResolver {
         Ok(Self { paths })
     }
 
-    fn build_machine<'a>(&'a self, direct_boot: bool, metadata_path: &'a Path, create_acpi_table: bool, distribution: &'a str) -> Machine<'a> {
+    fn build_machine<'a>(
+        &'a self,
+        direct_boot: bool,
+        metadata_path: &'a Path,
+        create_acpi_table: bool,
+        distribution: &'a str,
+        qemu_version: Option<&'a str>,
+    ) -> Machine<'a> {
         Machine::builder()
             .cpu_count(self.paths.cpu_count)
             .memory_size(self.paths.memory_size)
@@ -149,6 +160,7 @@ impl PathResolver {
             .metadata_path(metadata_path)
             .create_acpi_table(create_acpi_table)
             .distribution(distribution)
+            .maybe_qemu_version(qemu_version)
             .build()
     }
 }
@@ -178,7 +190,10 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
     // Build machine
     let path_resolver = PathResolver::new(&config.metadata, image_config, !config.runtime_only)?;
     let create_acpi_table = config.create_acpi_tables.is_some();
-    let distribution = config.create_acpi_tables.as_deref().unwrap_or("");
+    let (distribution, qemu_version): (&str, Option<&str>) = match &config.create_acpi_tables {
+        Some(vs) => (vs[0].as_str(), vs.get(1).map(String::as_str)),
+        None => ("", None),
+    };
     let mut error_msgs = String::new();
 
     // Check usage of --create-acpi-tables flag
@@ -205,7 +220,13 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
         return Err(anyhow!(error_msgs.trim_end().to_owned()));
     }
 
-    let machine = path_resolver.build_machine(direct_boot, &config.metadata, create_acpi_table, distribution);
+    let machine = path_resolver.build_machine(
+        direct_boot,
+        &config.metadata,
+        create_acpi_table,
+        distribution,
+        qemu_version,
+    );
 
     // Measure
     let measurements = if config.platform_only {

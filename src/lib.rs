@@ -51,7 +51,7 @@ pub struct BootConfig {
     pub qemu: Option<QemuShape>,
 }
 
-/// QEMU command-line pass-through consumed by `create_acpi_tables.sh`.
+/// QEMU command-line pass-through consumed by the ACPI dumper.
 /// Device-ordering matters. See README for the field-by-field schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QemuShape {
