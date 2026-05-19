@@ -48,7 +48,32 @@ pub struct BootConfig {
     pub table_loader: Option<String>,
     pub boot_order: Option<String>,
     pub path_boot_xxxx: Option<String>,
+    pub qemu: Option<QemuShape>,
 }
+
+/// QEMU command-line pass-through consumed by `create_acpi_tables.sh`.
+/// Device-ordering matters. See README for the field-by-field schema.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QemuShape {
+    pub machine: String,
+    #[serde(default = "default_cpu")]
+    pub cpu: String,
+    #[serde(default = "default_accel")]
+    pub accel: String,
+    #[serde(default)]
+    pub globals: Vec<String>,
+    #[serde(default)]
+    pub objects: Vec<String>,
+    #[serde(default)]
+    pub netdevs: Vec<String>,
+    #[serde(default)]
+    pub devices: Vec<String>,
+    #[serde(default)]
+    pub fw_cfg: Vec<String>,
+}
+
+fn default_cpu() -> String { "host".to_string() }
+fn default_accel() -> String { "kvm".to_string() }
 
 /// Direct boot specific information
 #[derive(Debug, Clone, Serialize, Deserialize)]

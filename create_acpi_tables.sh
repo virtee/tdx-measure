@@ -167,6 +167,21 @@ parse_metadata() {
         exit 1
     fi
 
+    # Optional generic QEMU shape descriptor. When `boot_config.qemu` is present,
+    # the QEMU command is built from its fields verbatim (plus the seven measurement-
+    # related core flags); nothing else is added implicitly. When absent, the script
+    # falls back to the Canonical direct-boot defaults preserved from the upstream.
+    QEMU_BLOCK_PRESENT=$(jq -r '.boot_config.qemu // empty' "$METADATA_JSON_PATH")
+    if [[ -n "$QEMU_BLOCK_PRESENT" ]]; then
+        QEMU_MACHINE=$(jq -r '.boot_config.qemu.machine // empty' "$METADATA_JSON_PATH")
+        QEMU_CPU=$(jq -r '.boot_config.qemu.cpu // "host"' "$METADATA_JSON_PATH")
+        QEMU_ACCEL=$(jq -r '.boot_config.qemu.accel // "kvm"' "$METADATA_JSON_PATH")
+        if [[ -z "$QEMU_MACHINE" ]]; then
+            log_error "boot_config.qemu is present but boot_config.qemu.machine is missing"
+            exit 1
+        fi
+    fi
+
     # Resolve paths relative to metadata.json location (if not already absolute)
     [[ "$BIOS" != /* ]] && BIOS="$metadata_dir/$BIOS"
     [[ "$ACPI_TABLES_PATH" != /* ]] && ACPI_TABLES_PATH="$metadata_dir/$ACPI_TABLES_PATH"
@@ -188,6 +203,9 @@ parse_metadata() {
 
     log_success "Metadata parsed successfully"
     log_info "Configuration: CPUs=$CPUS, Memory=$MEMORY, BIOS=$BIOS, ACPI Tables Target Path=$ACPI_TABLES_PATH"
+    if [[ -n "$QEMU_BLOCK_PRESENT" ]]; then
+        log_info "Using boot_config.qemu shape: machine='$QEMU_MACHINE' cpu='$QEMU_CPU' accel='$QEMU_ACCEL'"
+    fi
 }
 
 # Build Docker image
@@ -222,6 +240,40 @@ build_docker_image() {
     log_success "Docker image built successfully"
 }
 
+# Build the QEMU command from the `boot_config.qemu` shape descriptor in metadata.json.
+# The seven measurement-related core flags are added unconditionally; everything
+# else comes verbatim from the block. Within `devices`, command-line order is
+# preserved because QEMU's PCI auto-slot assignment depends on it.
+build_qemu_args_from_block() {
+    local out_var="$1"
+    local -a args=(
+        "-accel" "$QEMU_ACCEL"
+        "-m" "$MEMORY"
+        "-smp" "${CPUS},maxcpus=${CPUS}"
+        "-cpu" "$QEMU_CPU"
+        "-no-reboot"
+        "-nodefaults"
+        "-vga" "none"
+        "-nographic"
+        "-bios" "/usr/share/ovmf/OVMF.fd"
+        "-machine" "$QEMU_MACHINE"
+    )
+    local v
+    while IFS= read -r v; do [[ -n "$v" ]] && args+=("-global" "$v"); done \
+        < <(jq -r '.boot_config.qemu.globals[]? // empty' "$METADATA_JSON_PATH")
+    while IFS= read -r v; do [[ -n "$v" ]] && args+=("-object" "$v"); done \
+        < <(jq -r '.boot_config.qemu.objects[]? // empty' "$METADATA_JSON_PATH")
+    while IFS= read -r v; do [[ -n "$v" ]] && args+=("-netdev" "$v"); done \
+        < <(jq -r '.boot_config.qemu.netdevs[]? // empty' "$METADATA_JSON_PATH")
+    while IFS= read -r v; do [[ -n "$v" ]] && args+=("-device" "$v"); done \
+        < <(jq -r '.boot_config.qemu.devices[]? // empty' "$METADATA_JSON_PATH")
+    while IFS= read -r v; do [[ -n "$v" ]] && args+=("-fw_cfg" "$v"); done \
+        < <(jq -r '.boot_config.qemu.fw_cfg[]? // empty' "$METADATA_JSON_PATH")
+    # We can't directly assign an array to a nameref-by-string in older bash,
+    # so eval the assignment via printf-quoted args.
+    eval "${out_var}=(\"\${args[@]}\")"
+}
+
 # Run QEMU container to generate ACPI tables
 generate_acpi_tables() {
     log_info "Running QEMU container to generate ACPI tables..."
@@ -229,27 +281,24 @@ generate_acpi_tables() {
     log_warning "This script uses QEMU source from ppa:kobuk-team/tdx-release PPA which provides Intel TDX-enabled QEMU."
     log_warning "Some upstream BIOS files are missing in this QEMU source but are not required for ACPI table generation."
 
-    # Construct QEMU arguments using minimal QEMU arguments from Canonical's direct boot script
-    # https://github.com/canonical/tdx/blob/3.3/guest-tools/direct-boot/boot_direct.sh#L54
-    # to match ACPI event measurements
-    local qemu_args=(
-        "-accel" "kvm"
-        "-m" "$MEMORY"
-        "-smp" "$CPUS"
-        "-cpu" "host"
-        "-machine" "q35,kernel-irqchip=split,hpet=off,smm=off,pic=off"
-        "-bios" "/usr/share/ovmf/OVMF.fd"
-        "-nographic"
-        "-nodefaults"
-        "-serial" "stdio"
-    )
-
-    # Get host's kvm group ID for device access
-    local kvm_gid
-    kvm_gid=$(getent group kvm | cut -d: -f3)
-    if [[ -z "$kvm_gid" ]]; then
-        log_error "kvm group not found on host system"
-        exit 1
+    local qemu_args=()
+    if [[ -n "$QEMU_BLOCK_PRESENT" ]]; then
+        log_info "Building QEMU args from boot_config.qemu"
+        build_qemu_args_from_block qemu_args
+    else
+        # Canonical direct-boot defaults: minimal args from
+        # https://github.com/canonical/tdx/blob/3.3/guest-tools/direct-boot/boot_direct.sh#L54
+        qemu_args=(
+            "-accel" "kvm"
+            "-m" "$MEMORY"
+            "-smp" "$CPUS"
+            "-cpu" "host"
+            "-machine" "q35,kernel-irqchip=split,hpet=off,smm=off,pic=off"
+            "-bios" "/usr/share/ovmf/OVMF.fd"
+            "-nographic"
+            "-nodefaults"
+            "-serial" "stdio"
+        )
     fi
 
     # Create temporary directory for ACPI tables output to allow the user in the container to write to it.
@@ -257,12 +306,44 @@ generate_acpi_tables() {
     tmp_acpi_tables_dir=$(mktemp -d)
     chmod o+rwx "$tmp_acpi_tables_dir"
 
+    # Whether we need to expose /dev/kvm. The Canonical fallback path always uses
+    # KVM (its hardcoded args contain `-accel kvm`). For the qemu-block path, we
+    # mount /dev/kvm only when the caller asked for `accel: "kvm"` — `tcg` (or
+    # any other software backend) lifts the "x86 host with KVM" requirement.
+    local need_kvm=true
+    if [[ -n "$QEMU_BLOCK_PRESENT" && "$QEMU_ACCEL" != "kvm" ]]; then
+        need_kvm=false
+    fi
+
+    # The kvm group also owns /dev/vhost-vsock on Linux, so add it whenever
+    # either device matters.
+    local extra_docker_args=()
+    local kvm_gid
+    kvm_gid=$(getent group kvm | cut -d: -f3 || true)
+    if [[ -n "$kvm_gid" ]]; then
+        extra_docker_args+=(--group-add "$kvm_gid")
+    fi
+
+    if $need_kvm; then
+        if [[ ! -e /dev/kvm ]]; then
+            log_error "Accelerator requires /dev/kvm but the host has none (use accel: \"tcg\" to skip KVM)"
+            exit 1
+        fi
+        extra_docker_args+=(--device /dev/kvm:/dev/kvm)
+    fi
+
+    # Some QEMU device strings (e.g. `vhost-vsock-pci`) need /dev/vhost-vsock
+    # from the host. Mount it whenever a custom qemu block is in play and the
+    # host has the device; unused if the block doesn't reference it.
+    if [[ -n "$QEMU_BLOCK_PRESENT" && -e /dev/vhost-vsock ]]; then
+        extra_docker_args+=(--device /dev/vhost-vsock:/dev/vhost-vsock)
+    fi
+
     # Run Docker container
     if ! docker run \
         --rm \
         --name "$CONTAINER_NAME" \
-        --device /dev/kvm:/dev/kvm \
-        --group-add "$kvm_gid" \
+        "${extra_docker_args[@]}" \
         -v "$BIOS:/usr/share/ovmf/OVMF.fd:ro" \
         -v "$tmp_acpi_tables_dir:/output" \
         "$IMAGE_NAME" \

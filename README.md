@@ -79,6 +79,16 @@ Create `metadata.json` file with the below metadata:
     Alternatively, a file containing the RSDP can be extracted by running the [`extract_config_files.py`](extract_config_files.py) script inside a TD, which is configured identically to the target configuration.
     In this case, the extracted file can be provided with this flag.
 
+- `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`. Each field is a thin pass-through to QEMU. When present, `create_acpi_tables.sh` builds the QEMU command from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`). When absent, the script falls back to the Canonical direct-boot args. Fields:
+  - `machine` *(required when block is present)*: value passed verbatim to `-machine`, e.g. `"q35,kernel_irqchip=split,memory-backend=mem0,smm=off,pic=off"`.
+  - `cpu` *(optional, default `"host"`)*: value passed verbatim to `-cpu`. Use a named model with an explicit `phys-bits=N` (e.g. `"Skylake-Server,phys-bits=46"`) to make the run independent of the host CPU.
+  - `accel` *(optional, default `"kvm"`)*: value passed verbatim to `-accel`. Use `"tcg"` to skip KVM (CI runners without `/dev/kvm`, ARM hosts via x86 emulation, …).
+  - `globals`: list of strings, each emitted as `-global <value>`.
+  - `objects`: list of strings, each emitted as `-object <value>`.
+  - `netdevs`: list of strings, each emitted as `-netdev <value>`.
+  - `devices`: list of strings, each emitted as `-device <value>`. **Order is part of the API contract**: QEMU's PCI auto-slot assignment iterates `-device` arguments in command-line order and picks the lowest free slot, so `devices` must be authored in the same order as the reference launch you are mirroring. A `slot=N` argument on a `pcie-root-port` is only a hint and shifts if the slot is already taken by an earlier auto-assigned device. Order within `globals` / `objects` / `netdevs` / `fw_cfg` does not influence the ACPI tables.
+  - `fw_cfg`: list of strings, each emitted as `-fw_cfg <value>`.
+
 - `direct`: Direct boot specific configuration used to compute RTMR[1] and RTMR[2]
   - `kernel`: Path to file (e.g., `vmlinuz`) of kernel image, which will be directly loaded and executed by OVMF.
     The file can be obtain by following [these instructions](https://github.com/canonical/tdx/tree/main/guest-tools/direct-boot#prerequisites).
