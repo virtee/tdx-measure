@@ -15,8 +15,21 @@ on:
 permissions:
   contents: write
 
+# All third-party actions are pinned by full 40-char commit SHA per GitHub's
+# hardening guide (security-hardening-for-github-actions). The trailing comment
+# records the human-readable release the SHA was resolved from so reviewers
+# (and Dependabot) can keep these current.
+#
+# Caching is done with first-party `actions/cache`; we deliberately avoid
+# Swatinem/rust-cache to minimise third-party dependencies. The dep tree is
+# small enough that the savings vs cold compile are modest (~15-25s) so the
+# extra YAML is a fair trade for one less external action to vet.
+
 jobs:
   build:
+    # Builds the CLI binary in release mode once and uploads it as an artifact
+    # so the regen and release jobs can consume it instead of each rebuilding
+    # locally. Build once, consume many.
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
@@ -32,7 +45,17 @@ jobs:
         key: cargo-cli-${{ runner.os }}-${{ hashFiles('cli/Cargo.lock') }}
         restore-keys: |
           cargo-cli-${{ runner.os }}-
-    - run: cd cli && cargo build --verbose
+    - name: Build CLI (release)
+      run: cd cli && cargo build --release
+    - name: Upload CLI binary
+      # upload-artifact@v4 uses zip and does NOT preserve Unix +x. Consumers
+      # must chmod +x after download.
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+      with:
+        name: tdx-measure-cli
+        path: cli/target/release/tdx-measure
+        if-no-files-found: error
+        retention-days: 7
 
   test:
     # Fast tests: 9 unit tests + 2 fixture-walk integration tests. Runs in
@@ -73,6 +96,7 @@ jobs:
     # Slow round-trip test: builds the patched-QEMU Docker image and runs
     # `--create-acpi-tables` against each fixture, asserting bytes match.
     # Runs only on manual dispatch to avoid burning ~5 min on every PR.
+    needs: build
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -97,6 +121,15 @@ jobs:
         key: ovmf-fd-${{ hashFiles('tests/fetch_ovmf.sh') }}
     - name: Fetch OVMF.fd
       run: ./tests/fetch_ovmf.sh
+    - name: Download CLI binary
+      # Consumes the artifact uploaded by the `build` job; no local rebuild.
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      with:
+        name: tdx-measure-cli
+        path: cli/target/release/
+    - name: Make CLI executable
+      # upload-artifact@v4's zip layer drops the +x bit; restore it.
+      run: chmod +x cli/target/release/tdx-measure
     - name: Run round-trip regen tests
       # `--ignored` runs the gated tests/regen.rs. The Canonical-defaults
       # fixture uses `accel: "kvm"` and is auto-skipped on KVM-less runners
@@ -109,25 +142,21 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-
-    - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6  # v1.16.1
-
-    - name: Cache cargo deps (cli)
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+    - name: Download CLI binary
+      # Consumes the artifact uploaded by the `build` job; no local rebuild.
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
       with:
-        path: |
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          cli/target/
-        key: cargo-cli-${{ runner.os }}-${{ hashFiles('cli/Cargo.lock') }}
-        restore-keys: |
-          cargo-cli-${{ runner.os }}-
-
-    - name: Build release
-      run: cd cli && cargo build --release
-
+        name: tdx-measure-cli
+        path: cli/target/release/
+    - name: Make CLI executable
+      # upload-artifact@v4's zip layer drops the +x bit; restore it.
+      run: chmod +x cli/target/release/tdx-measure
     - name: Create Release
+      # Use the first-party `gh` CLI (pre-installed on every GitHub-hosted
+      # runner) instead of a third-party release action. `gh release create`
+      # creates the release for the just-pushed tag and uploads the binary in
+      # one call. `--generate-notes` populates the body from commits / PRs
+      # since the previous tag; drop the flag for an empty body.
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
