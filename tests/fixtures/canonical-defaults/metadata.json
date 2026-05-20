@@ -1,0 +1,13 @@
+{
+    "boot_config": {
+        "cpus": 4,
+        "memory": "2048M",
+        "bios": "../OVMF.fd",
+        "acpi_tables": "acpi_tables.bin"
+    },
+    "direct": {
+        "kernel": "/dev/null",
+        "initrd": "/dev/null",
+        "cmdline": ""
+    }
+}

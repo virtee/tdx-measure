@@ -10,6 +10,7 @@ on:
       - 'v*'
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,6 +22,55 @@ jobs:
     - uses: actions/checkout@v4
     - uses: actions-rust-lang/setup-rust-toolchain@v1
     - run: cd cli && cargo build --verbose
+
+  test:
+    # Fast tests: 9 unit tests + 2 fixture-walk integration tests. Runs in
+    # well under a minute including the OVMF.fd download (which is cached
+    # across runs so subsequent invocations are sub-second).
+    #
+    # The slow round-trip docker-based regen test (tests/regen.rs) is gated
+    # behind `--ignored` and runs only in the `regen` job below, which is
+    # manual / on-demand.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: Swatinem/rust-cache@v2
+    - name: Cache OVMF.fd
+      uses: actions/cache@v4
+      with:
+        path: tests/fixtures/OVMF.fd
+        # Key on the fetch script's content so changes (new pin / new URL)
+        # invalidate the cache automatically.
+        key: ovmf-fd-${{ hashFiles('tests/fetch_ovmf.sh') }}
+    - name: Fetch OVMF.fd
+      run: ./tests/fetch_ovmf.sh
+    - name: Run unit + integration tests
+      run: cargo test --release
+
+  regen:
+    # Slow round-trip test: builds the patched-QEMU Docker image and runs
+    # `--create-acpi-tables` against each fixture, asserting bytes match.
+    # Runs only on manual dispatch to avoid burning ~5 min on every PR.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: Swatinem/rust-cache@v2
+    - uses: docker/setup-buildx-action@v3
+    - name: Cache OVMF.fd
+      uses: actions/cache@v4
+      with:
+        path: tests/fixtures/OVMF.fd
+        key: ovmf-fd-${{ hashFiles('tests/fetch_ovmf.sh') }}
+    - name: Fetch OVMF.fd
+      run: ./tests/fetch_ovmf.sh
+    - name: Run round-trip regen tests
+      # `--ignored` runs the gated tests/regen.rs. The Canonical-defaults
+      # fixture uses `accel: "kvm"` and is auto-skipped on KVM-less runners
+      # (GitHub Actions standard hosted runners don't expose /dev/kvm).
+      run: cargo test --release --test regen -- --ignored --nocapture
 
   release:
     needs: build

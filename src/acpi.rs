@@ -575,3 +575,306 @@ pub fn generate_acpi_tables(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds an 8-byte ACPI table header with the given signature and length.
+    /// Body bytes (if any) are caller-appended.
+    fn header(sig: &[u8; 4], len: u32) -> Vec<u8> {
+        let mut h = Vec::new();
+        h.extend_from_slice(sig);
+        h.extend_from_slice(&len.to_le_bytes());
+        h
+    }
+
+    /// Concatenates a list of (sig, padded_body_len) into a blob shaped like
+    /// `etc/acpi/tables`. Each entry becomes `<8-byte header><(len-8) zeros>`.
+    fn build_blob(tables: &[(&[u8; 4], u32)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &(sig, len) in tables {
+            out.extend(header(sig, len));
+            out.resize(out.len() + (len as usize - 8), 0);
+        }
+        out
+    }
+
+    #[test]
+    fn find_acpi_table_returns_offsets_and_csum_for_each_table() {
+        // Minimal Canonical-defaults table set, no HPET; 4-entry RSDT (len=36+16).
+        let blob = build_blob(&[
+            (b"FACS", 64),
+            (b"DSDT", 200),
+            (b"FACP", 244),
+            (b"APIC", 144),
+            (b"MCFG", 60),
+            (b"WAET", 40),
+            (b"RSDT", 52),
+        ]);
+
+        // Spot-check three tables. csum is the offset of the table's
+        // 9th byte (header layout: 4-byte sig, 4-byte length, 1-byte revision,
+        // 1-byte checksum -> checksum lives at offset+9).
+        let (off, csum, len) = find_acpi_table(&blob, "DSDT").unwrap();
+        assert_eq!(off, 64);
+        assert_eq!(csum, 73);
+        assert_eq!(len, 200);
+
+        let (off, _, len) = find_acpi_table(&blob, "FACP").unwrap();
+        assert_eq!(off, 264);
+        assert_eq!(len, 244);
+
+        let (off, _, _) = find_acpi_table(&blob, "RSDT").unwrap();
+        assert_eq!(off, 64 + 200 + 244 + 144 + 60 + 40); // = 752
+    }
+
+    #[test]
+    fn list_acpi_tables_walks_blob_and_stops_at_padding() {
+        let blob = build_blob(&[
+            (b"FACS", 64),
+            (b"DSDT", 100),
+            (b"FACP", 244),
+            (b"RSDT", 40),
+        ]);
+        let list = list_acpi_tables(&blob).unwrap();
+        let sigs: Vec<&[u8]> = list.iter().map(|(s, ..)| s.as_slice()).collect();
+        assert_eq!(sigs, [b"FACS".as_slice(), b"DSDT", b"FACP", b"RSDT"]);
+
+        // Padding region (zeros) after the last table must terminate the walk,
+        // not be treated as a malformed table.
+        let mut blob_padded = blob.clone();
+        blob_padded.resize(blob.len() + 4096, 0);
+        let list2 = list_acpi_tables(&blob_padded).unwrap();
+        assert_eq!(list2.len(), 4);
+    }
+
+    /// Decodes one 128-byte QEMU loader command, returning a tuple shaped like
+    /// (cmd_type, file_or_ptr_file, optional_pointee_file, payload_u32s).
+    /// Used to assert the byte layout of `derive_table_loader` without re-
+    /// implementing the encoder.
+    fn decode_loader_cmd(cmd: &[u8]) -> (u32, String, Option<String>, Vec<u32>) {
+        assert_eq!(cmd.len(), 128);
+        let kind = u32::from_le_bytes(cmd[0..4].try_into().unwrap());
+        let read_str = |off: usize| -> String {
+            let s = &cmd[off..off + FIXED_STRING_LEN];
+            let end = s.iter().position(|b| *b == 0).unwrap_or(s.len());
+            std::str::from_utf8(&s[..end]).unwrap().to_string()
+        };
+        match kind {
+            // Allocate: file + alignment + zone
+            1 => {
+                let file = read_str(4);
+                let align = u32::from_le_bytes(cmd[60..64].try_into().unwrap());
+                let zone = cmd[64] as u32;
+                (1, file, None, vec![align, zone])
+            }
+            // AddPtr: pointer_file + pointee_file + offset + size
+            2 => {
+                let ptr_file = read_str(4);
+                let ptee_file = read_str(60);
+                let ptr_off = u32::from_le_bytes(cmd[116..120].try_into().unwrap());
+                let ptr_size = cmd[120] as u32;
+                (2, ptr_file, Some(ptee_file), vec![ptr_off, ptr_size])
+            }
+            // AddChecksum: file + result_offset + start + length
+            3 => {
+                let file = read_str(4);
+                let result = u32::from_le_bytes(cmd[60..64].try_into().unwrap());
+                let start = u32::from_le_bytes(cmd[64..68].try_into().unwrap());
+                let length = u32::from_le_bytes(cmd[68..72].try_into().unwrap());
+                (3, file, None, vec![result, start, length])
+            }
+            other => panic!("unknown loader cmd type {other}"),
+        }
+    }
+
+    fn split_cmds(loader: &[u8]) -> Vec<&[u8]> {
+        assert!(loader.len() >= LDR_LENGTH);
+        loader
+            .chunks_exact(128)
+            .take_while(|chunk| u32::from_le_bytes(chunk[0..4].try_into().unwrap()) != 0)
+            .collect()
+    }
+
+    #[test]
+    fn derive_table_loader_emits_canonical_no_hpet_layout() {
+        let blob = build_blob(&[
+            (b"FACS", 64),
+            (b"DSDT", 100),
+            (b"FACP", 244),
+            (b"APIC", 144),
+            (b"MCFG", 60),
+            (b"WAET", 40),
+            (b"RSDT", 52), // header (36) + 4 × 4-byte entries
+        ]);
+        let loader = derive_table_loader(&blob).unwrap();
+        let cmds: Vec<_> = split_cmds(&loader).into_iter().map(decode_loader_cmd).collect();
+
+        // Expected command sequence per the docstring on derive_table_loader.
+        // Allocate rsdp + Allocate tables + AddChecksum DSDT + 3×AddPtr FACP + AddChecksum FACP
+        // + AddChecksum APIC + AddChecksum MCFG + AddChecksum WAET + 4×AddPtr RSDT
+        // + AddChecksum RSDT + AddPtr RSDP + AddChecksum RSDP = 17 commands.
+        assert_eq!(cmds.len(), 17);
+        assert_eq!(cmds[0].0, 1); // Allocate
+        assert_eq!(cmds[0].1, "etc/acpi/rsdp");
+        assert_eq!(cmds[1].0, 1);
+        assert_eq!(cmds[1].1, "etc/acpi/tables");
+        assert_eq!(cmds[2].0, 3); // AddChecksum DSDT
+        assert_eq!(cmds[2].3, vec![64 + 9, 64, 100]);
+
+        // 3 AddPtr at facp+36, facp+40, facp+140 (offsets relative to the
+        // FACP base in the concatenated blob)
+        let facp_off = 64 + 100;
+        for (i, &expected_off) in [36u32, 40, 140].iter().enumerate() {
+            let cmd = &cmds[3 + i];
+            assert_eq!(cmd.0, 2);
+            assert_eq!(cmd.3[0], facp_off + expected_off);
+        }
+        // 4 RSDT pointers (no HPET) at rsdt+36/+40/+44/+48
+        let rsdt_off = 64 + 100 + 244 + 144 + 60 + 40;
+        for (i, expected_off) in (36u32..36 + 4 * 4).step_by(4).enumerate() {
+            let cmd = &cmds[10 + i];
+            assert_eq!(cmd.0, 2);
+            assert_eq!(cmd.3[0], rsdt_off + expected_off);
+        }
+        // RSDT checksum, then the final RSDP wiring + checksum.
+        assert_eq!(cmds[14].0, 3); // AddChecksum RSDT
+        assert_eq!(cmds[14].1, "etc/acpi/tables");
+        assert_eq!(cmds[15].0, 2); // AddPtr rsdp+16 -> tables
+        assert_eq!(cmds[15].1, "etc/acpi/rsdp");
+        assert_eq!(cmds[15].3, vec![16, 4]);
+        assert_eq!(cmds[16].0, 3); // AddChecksum rsdp
+        assert_eq!(cmds[16].1, "etc/acpi/rsdp");
+        assert_eq!(cmds[16].3, vec![8, 0, 20]);
+
+        // Buffer must be padded to LDR_LENGTH (4096).
+        assert_eq!(loader.len(), LDR_LENGTH);
+    }
+
+    #[test]
+    fn derive_table_loader_with_hpet_adds_an_extra_addchecksum_and_rsdt_ptr() {
+        // Same shape with HPET in the mix. RSDT now has 5 entries (FACP, APIC,
+        // HPET, MCFG, WAET) so length = 36 + 5*4 = 56. Regression case for the
+        // pre-rewrite code that hardcoded 4 RSDT entries.
+        let blob = build_blob(&[
+            (b"FACS", 64),
+            (b"DSDT", 100),
+            (b"FACP", 244),
+            (b"APIC", 144),
+            (b"HPET", 56),
+            (b"MCFG", 60),
+            (b"WAET", 40),
+            (b"RSDT", 56),
+        ]);
+        let loader = derive_table_loader(&blob).unwrap();
+        let cmds: Vec<_> = split_cmds(&loader).into_iter().map(decode_loader_cmd).collect();
+
+        // 17 + 2 commands now: one extra AddChecksum HPET + one extra AddPtr RSDT entry.
+        assert_eq!(cmds.len(), 19);
+        // Count AddChecksums in `etc/acpi/tables` (i.e. tables blob, not rsdp).
+        let checksum_tables: Vec<_> = cmds.iter()
+            .filter(|c| c.0 == 3 && c.1 == "etc/acpi/tables")
+            .collect();
+        // DSDT + FACP + APIC + HPET + MCFG + WAET + RSDT = 7
+        assert_eq!(checksum_tables.len(), 7);
+        // Count RSDT-entry AddPtrs (5 vs the 4 the old code emitted).
+        let rsdt_off = 64 + 100 + 244 + 144 + 56 + 60 + 40;
+        let rsdt_ptrs: Vec<_> = cmds.iter()
+            .filter(|c| c.0 == 2 && c.1 == "etc/acpi/tables"
+                     && c.3[0] >= rsdt_off + 36 && c.3[0] < rsdt_off + 36 + 5 * 4)
+            .collect();
+        assert_eq!(rsdt_ptrs.len(), 5);
+    }
+
+    #[test]
+    fn qemu_pkg_for_known_distros_returns_pinned_defaults() {
+        let p = qemu_pkg_for("ubuntu:25.04", None).unwrap();
+        assert_eq!(p.source, "ppa");
+        assert_eq!(p.version, "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2");
+
+        let p = qemu_pkg_for("ubuntu:26.04", None).unwrap();
+        assert_eq!(p.source, "main");
+        assert_eq!(p.version, "1:10.2.1+ds-1ubuntu4");
+    }
+
+    #[test]
+    fn qemu_pkg_for_honors_version_override() {
+        let p = qemu_pkg_for("ubuntu:26.04", Some("1:10.3.0-1ubuntu1")).unwrap();
+        assert_eq!(p.source, "main");
+        assert_eq!(p.version, "1:10.3.0-1ubuntu1");
+
+        // Even an empty override (caller asked for "latest") wins over the pin.
+        let p = qemu_pkg_for("ubuntu:26.04", Some("")).unwrap();
+        assert_eq!(p.version, "");
+    }
+
+    #[test]
+    fn qemu_pkg_for_rejects_unknown_distro() {
+        assert!(qemu_pkg_for("debian:12", None).is_err());
+        assert!(qemu_pkg_for("", None).is_err());
+    }
+
+    #[test]
+    fn build_qemu_args_canonical_fallback_matches_dstack_reference() {
+        // Canonical direct-boot args from the upstream `dstack`-derived flow.
+        // Pinned because the Canonical-defaults scenario depends on this exact order.
+        let args = build_qemu_args(None, 4, "2048M");
+        let expected: Vec<&str> = vec![
+            "-accel", "kvm",
+            "-m", "2048M",
+            "-smp", "4",
+            "-cpu", "host",
+            "-machine", "q35,kernel-irqchip=split,hpet=off,smm=off,pic=off",
+            "-bios", OVMF_IN_CONTAINER,
+            "-nographic",
+            "-nodefaults",
+            "-serial", "stdio",
+        ];
+        let got: Vec<&str> = args.iter().map(|s| s.to_str().unwrap()).collect();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn build_qemu_args_qemu_block_passes_fields_verbatim_and_in_documented_order() {
+        let shape = QemuShape {
+            machine: "q35,kernel_irqchip=split,smm=off,pic=off".into(),
+            cpu: "Skylake-Server,phys-bits=46".into(),
+            accel: "tcg".into(),
+            globals: vec!["q35-pcihost.pci-hole64-size=4096G".into()],
+            objects: vec!["memory-backend-ram,id=mem0,size=16384M".into()],
+            netdevs: vec!["hubport,id=net0,hubid=0".into()],
+            devices: vec![
+                "e1000,netdev=net0,bus=pcie.0,addr=0x2,romfile=".into(),
+                "virtio-rng-pci".into(),
+            ],
+            fw_cfg: vec!["name=opt/ovmf/X-PciMmio64Mb,string=262144".into()],
+        };
+        let args = build_qemu_args(Some(&shape), 8, "16384M")
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect::<Vec<_>>();
+
+        // Core seven flags first (in a documented order), then -machine, then
+        // user-supplied lists in -global / -object / -netdev / -device / -fw_cfg order.
+        assert_eq!(args, vec![
+            "-accel", "tcg",
+            "-m", "16384M",
+            "-smp", "8,maxcpus=8",
+            "-cpu", "Skylake-Server,phys-bits=46",
+            "-no-reboot",
+            "-nodefaults",
+            "-vga", "none",
+            "-nographic",
+            "-bios", OVMF_IN_CONTAINER,
+            "-machine", "q35,kernel_irqchip=split,smm=off,pic=off",
+            "-global", "q35-pcihost.pci-hole64-size=4096G",
+            "-object", "memory-backend-ram,id=mem0,size=16384M",
+            "-netdev", "hubport,id=net0,hubid=0",
+            "-device", "e1000,netdev=net0,bus=pcie.0,addr=0x2,romfile=",
+            "-device", "virtio-rng-pci",
+            "-fw_cfg", "name=opt/ovmf/X-PciMmio64Mb,string=262144",
+        ]);
+    }
+
+}
