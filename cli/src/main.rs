@@ -240,9 +240,9 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
         machine.measure().context("Failed to measure machine configuration")?
     };
 
-    // Generate transcript
+    // Generate transcript (if requested).
     if let Some(ref transcript_file) = config.transcript {
-        return generate_transcript(transcript_file, &path_resolver, direct_boot, config.platform_only, config.runtime_only);
+        generate_transcript(transcript_file, &path_resolver, direct_boot, config.platform_only, config.runtime_only)?;
     }
 
     // Output results
