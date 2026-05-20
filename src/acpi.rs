@@ -325,13 +325,23 @@ struct QemuPkg<'a> {
     /// Version handed to the source fetcher. Empty string == "let the fetcher
     /// pick the current main-archive version" (only meaningful for `main`).
     version: &'a str,
+    /// Immutable OCI digest of the base image (`sha256:...`).
+    image_digest: &'static str,
 }
 
 fn qemu_pkg_for<'a>(distribution: &str, version_override: Option<&'a str>) -> Result<QemuPkg<'a>> {
     // Pinned defaults for reproducibility; override via `--qemu-version`.
-    let (source, default_version): (&'static str, &'static str) = match distribution {
-        "ubuntu:25.04" => ("ppa",  "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2"),
-        "ubuntu:26.04" => ("main", "1:10.2.1+ds-1ubuntu4"),
+    let (source, default_version, image_digest): (&'static str, &'static str, &'static str) = match distribution {
+        "ubuntu:25.04" => (
+            "ppa",
+            "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2",
+            "sha256:27771fb7b40a58237c98e8d3e6b9ecdd9289cec69a857fccfb85ff36294dac20",
+        ),
+        "ubuntu:26.04" => (
+            "main",
+            "1:10.2.1+ds-1ubuntu4",
+            "sha256:f3d28607ddd78734bb7f71f117f3c6706c666b8b76cbff7c9ff6e5718d46ff64",
+        ),
         other => bail!(
             "Unsupported distribution: {other}. Supported: ubuntu:25.04, ubuntu:26.04"
         ),
@@ -339,6 +349,7 @@ fn qemu_pkg_for<'a>(distribution: &str, version_override: Option<&'a str>) -> Re
     Ok(QemuPkg {
         source,
         version: version_override.unwrap_or(default_version),
+        image_digest,
     })
 }
 
@@ -431,10 +442,11 @@ fn build_docker_image(
         ),
     }
 
+    let pinned_image = format!("{distribution}@{}", pkg.image_digest);
     let status = Command::new("docker")
         .arg("build")
         .args(["--progress", "plain", "--tag", IMAGE_NAME])
-        .arg("--build-arg").arg(format!("DISTRIBUTION={distribution}"))
+        .arg("--build-arg").arg(format!("DISTRIBUTION={pinned_image}"))
         .arg("--build-arg").arg(format!("QEMU_SOURCE={}", pkg.source))
         .arg("--build-arg").arg(format!("QEMU_VERSION={}", pkg.version))
         .arg("--build-arg").arg(format!("ACPI_TABLES_NAME={acpi_tables_name}"))
@@ -792,10 +804,14 @@ mod tests {
         let p = qemu_pkg_for("ubuntu:25.04", None).unwrap();
         assert_eq!(p.source, "ppa");
         assert_eq!(p.version, "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2");
+        assert!(p.image_digest.starts_with("sha256:"));
+        assert_eq!(p.image_digest.len(), "sha256:".len() + 64);
 
         let p = qemu_pkg_for("ubuntu:26.04", None).unwrap();
         assert_eq!(p.source, "main");
         assert_eq!(p.version, "1:10.2.1+ds-1ubuntu4");
+        assert!(p.image_digest.starts_with("sha256:"));
+        assert_eq!(p.image_digest.len(), "sha256:".len() + 64);
     }
 
     #[test]
