@@ -25,9 +25,11 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+ARG QEMU_PPA=ppa:kobuk-team/tdx-release
+
 WORKDIR /
 RUN if [ "$QEMU_SOURCE" = "ppa" ]; then \
-        pull-ppa-source --ppa ppa:kobuk-team/tdx-release qemu ${QEMU_VERSION}; \
+        pull-ppa-source --ppa ${QEMU_PPA} qemu ${QEMU_VERSION}; \
     elif [ "$QEMU_SOURCE" = "main" ]; then \
         pull-lp-source qemu ${QEMU_VERSION}; \
     else \
