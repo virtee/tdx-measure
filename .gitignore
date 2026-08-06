@@ -33,3 +33,8 @@ Thumbs.db
 # Output files
 *.txt
 *.out
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/

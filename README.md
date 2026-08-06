@@ -5,9 +5,9 @@ Command-line tool and Rust library to calculate expected measurement of an Intel
 
 The `tdx-measure` tool takes a set of image binaries and platform config files as an input and outputs the corresponding TDX measurements. This makes it possible to exhaustively publish all images and config files that uniquely identify a TDX workload on a machine, making TD environments transparent and auditable.
 
-Currently, the tool is able to pre-calculate measurements for the boot chains from the Canonical's Intel TDX [repo](https://github.com/canonical/tdx).
-In particular, the measurement calculation was validated for TDs using Ubuntu 25.04 as guest OS running on Ubuntu 25.04 as host OS.
-The building and execution of `tdx-measure` was validated on Ubuntu 25.04.
+Currently, the tool is able to pre-calculate measurements for the boot chains from the Canonical's Intel TDX [repo](https://github.com/canonical/tdx) for Ubuntu 25.04, and from [Ubuntu's Intel TDX setup guide](https://ubuntu.com/server/docs/how-to/virtualisation/intel-tdx/) for Ubuntu 26.04.
+In particular, the measurement calculation was validated for TDs using Ubuntu 25.04 or Ubuntu 26.04 as guest OS running on the corresponding Ubuntu version as host OS.
+The building and execution of `tdx-measure` was validated on Ubuntu 25.04 and Ubuntu 26.04.
 
 ### Acknowledgment
 This project is a fork of dstack-mr from the [Dstack-TEE/dstack](https://github.com/Dstack-TEE/dstack) repository.
@@ -40,6 +40,8 @@ WARNING: when running with `--runtime-only`, the tool will assume a VM memory si
 
 ### Direct Boot
 
+> **Supported distributions:** Ubuntu 25.04, Ubuntu 26.04
+
 #### Metadata
 
 Create `metadata.json` file with the below metadata:
@@ -68,7 +70,57 @@ Create `metadata.json` file with the below metadata:
   - `cpus`: Number of virtual CPUs allocated to the TD.
   - `memory`: The amount of memory allocated to the TD (e.g., "2G" for 2 gigabytes).
   - `bios`: Path to file (e.g., `OVMF.fd`) containing a virtual BIOS, which is used to boot the TD image.
-    The file can be obtained by setting up the host OS following [these instructions](https://github.com/canonical/tdx/tree/main?tab=readme-ov-file#4-setup-host-os) and retrieving it from `/usr/share/ovmf/OVMF.fd`.
+    - **Ubuntu 25.04**: To use the OVMF binary shipped with Ubuntu 25.04, follow [these instructions](https://github.com/canonical/tdx/tree/main?tab=readme-ov-file#4-setup-host-os) and retrieve the file from `/usr/share/ovmf/OVMF.fd`.
+    - **Ubuntu 26.04**: As the measurement tool currently only supports non-secure-boot OVMF binaries and Ubuntu 26.04 only brings a secure-boot OVMF for Intel TDX, we cannot use it directly.
+      The following steps can be used to build a non-secure-boot OVMF binary for Intel TDX, which is as close as possible to the one provided by Ubuntu 26.04:
+
+      <details>
+      <summary><b><a id="building-ovmf-from-source-ubuntu-2604"></a>Building OVMF from source (Ubuntu 26.04)</b></summary>
+
+      1. Install build dependencies (skip if already installed):
+          ```bash
+          sudo apt install build-essential nasm acpica-tools uuid-dev
+          ```
+
+      2. Download and extract the edk2 source used by Ubuntu 26.04.
+          Note that we use the version `2025.11-3ubuntu7.2`, which was the current stable release for Ubuntu 26.04 (Resolute Raccoon) at the time of writing.
+          Please check [the edk2 package in Ubuntu page](https://launchpad.net/ubuntu/+source/edk2/) for the newest stable release.
+          If a newer version is used, we recommend adjusting the following commands accordingly.
+          ```bash
+          wget https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/edk2/2025.11-3ubuntu7.2/edk2_2025.11.orig.tar.xz
+          wget https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/edk2/2025.11-3ubuntu7.2/edk2_2025.11-3ubuntu7.2.debian.tar.xz
+          wget https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/edk2/2025.11-3ubuntu7.2/edk2_2025.11-3ubuntu7.2.dsc
+          dpkg-source -x edk2_2025.11-3ubuntu7.2.dsc
+          ```
+
+      3. Build OVMF by mirroring the `build-ovmf-inteltdx-ms` target in `debian/rules`, with the single change of `-DSECURE_BOOT_ENABLE=FALSE` instead of `TRUE`:
+          ```bash
+          cd edk2-2025.11
+          make -C BaseTools
+          source edksetup.sh
+          DEB_VERSION=$(dpkg-parsechangelog -l debian/changelog -S Version)
+          SOURCE_DATE_EPOCH=$(dpkg-parsechangelog -l debian/changelog -S Timestamp)
+          RELEASE_DATE=$(date -d@"$SOURCE_DATE_EPOCH" "+%m/%d/%Y")
+          VENDOR="$(lsb_release -is) distribution of EDK II"
+          build -p OvmfPkg/IntelTdx/IntelTdxX64.dsc -a X64 -t GCC5 -b RELEASE \
+            -DCC_MEASUREMENT_ENABLE=TRUE -DNETWORK_HTTP_BOOT_ENABLE=TRUE \
+            -DNETWORK_IP6_ENABLE=TRUE -DNETWORK_TLS_ENABLE \
+            -DTPM2_ENABLE=TRUE -DFD_SIZE_4MB \
+            -DBUILD_SHELL=FALSE -DSECURE_BOOT_ENABLE=FALSE -DSMM_REQUIRE=FALSE \
+            --pcd PcdFirmwareVendor=L"$VENDOR\0" \
+            --pcd PcdFirmwareVersionString=L"$DEB_VERSION\0" \
+            --pcd PcdFirmwareReleaseDateString=L"$RELEASE_DATE\0"
+          ```
+
+          The resulting `OVMF.fd` is at `Build/IntelTdx/RELEASE_GCC5/FV/OVMF.fd`.
+
+      4. Verify the existence of the OVMF binary:
+          ```bash
+          ls Build/IntelTdx/RELEASE_GCC5/FV/OVMF.fd
+          ```
+
+      </details>
+
   - `acpi_tables`: Path to a file containing ACPI tables, which describe the hardware configuration and device tree that the TD uses to discover and configure hardware.
     By using the `--create-acpi-tables` flag of the `tdx-measure` tool, the ACPI tables are generated automatically and stored to a file at the path provided by `acpi_tables`.
     Alternatively, a file containing the ACPI tables can be extracted by running the [`extract_config_files.py`](extract_config_files.py) script inside a TD, which is configured identically to the target configuration.
@@ -83,7 +135,7 @@ Create `metadata.json` file with the below metadata:
     Alternatively, a file containing the RSDP can be extracted by running the [`extract_config_files.py`](extract_config_files.py) script inside a TD, which is configured identically to the target configuration.
     In this case, the extracted file can be provided with this flag.
 
-- `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`. Each field is a thin pass-through to QEMU. When present, the QEMU command is built from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`). When absent, the tool falls back to the Canonical direct-boot args. Fields:
+- `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`. Each field is a thin pass-through to QEMU. When present, the QEMU command is built from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`). When absent, the tool falls back to the Canonical direct-boot args (see Canonical's [`boot_direct.sh`](https://github.com/canonical/tdx/blob/a599cf54510ec81667cedfb183e4da9f96be536d/guest-tools/direct-boot/boot_direct.sh#L54-L68)). If your TD configuration does not match Canonical's, you need to provide the QEMU shape matching your TD configuration, otherwise the tool's `RTMR[0]` prediction will not match the value measured by a real TD. Fields:
   - `machine` *(required when block is present)*: value passed verbatim to `-machine`, e.g. `"q35,kernel_irqchip=split,memory-backend=mem0,smm=off,pic=off"`.
   - `cpu` *(optional, default `"host"`)*: value passed verbatim to `-cpu`. Use a named model with an explicit `phys-bits=N` (e.g. `"Skylake-Server,phys-bits=46"`) to make the run independent of the host CPU.
   - `accel` *(optional, default `"kvm"`)*: value passed verbatim to `-accel`. Use `"tcg"` to skip KVM (CI runners without `/dev/kvm`, ARM hosts via x86 emulation, …).
@@ -95,9 +147,19 @@ Create `metadata.json` file with the below metadata:
 
 - `direct`: Direct boot specific configuration used to compute RTMR[1] and RTMR[2]
   - `kernel`: Path to file (e.g., `vmlinuz`) of kernel image, which will be directly loaded and executed by OVMF.
-    The file can be obtain by following [these instructions](https://github.com/canonical/tdx/tree/main/guest-tools/direct-boot#prerequisites).
+    - **Ubuntu 25.04**: The file can be obtained by following [these instructions](https://github.com/canonical/tdx/tree/main/guest-tools/direct-boot#prerequisites).
+    - **Ubuntu 26.04**: Download the TD guest cloud image and extract the kernel and initrd from it:
+        ```bash
+        wget https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img
+        sudo apt install python3-apt qemu-utils
+        sudo python3 extract_kernel_initrd.py resolute-server-cloudimg-amd64.img
+        ```
+        > **Note:** The extractor connects the image to an NBD device and mounts its partitions read-only, so it requires root privileges but does not use or need access to the host kernel image.
+        > It automatically disconnects the NBD device and preserves ownership of extracted files for the user who invoked `sudo`.
+        > If the loaded NBD module cannot expose enough image partitions, the extractor reports the required `modprobe` commands.
   - `initrd`: Path to file (e.g., `initrd.img`) of initial RAM disk, which is a temporary root filesystem loaded into memory during boot, containing drivers and tools needed to mount the actual root filesystem.
-    The file can be obtain by following the [these instructions](https://github.com/canonical/tdx/tree/main/guest-tools/direct-boot#prerequisites).
+    - **Ubuntu 25.04**: The file can be obtained by following [these instructions](https://github.com/canonical/tdx/tree/main/guest-tools/direct-boot#prerequisites).
+    - **Ubuntu 26.04**: Use the same guest image and [`extract_kernel_initrd.py`](extract_kernel_initrd.py) script as described for `kernel` above.
   - `cmdline`: Kernel command line parameters.
     These parameters specify the kernel command line arguments that are passed to QEMU using the `-append` option.
 
