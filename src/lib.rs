@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
-pub use machine::Machine;
+pub use machine::{Machine, QemuInfo};
 
 use util::{measure_log, measure_sha384};
 
