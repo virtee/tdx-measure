@@ -125,6 +125,8 @@ main archive:
 
 ### Indirect Boot
 
+> **Supported distributions:** Ubuntu 24.04
+
 #### Metadata
 
 Create `metadata.json` file with the below metadata:
@@ -142,7 +144,7 @@ Create `metadata.json` file with the below metadata:
     "path_boot_xxxx": "[path to directory containing Bootxxxx.bin files]"
   },
   "indirect": {
-    "qcow2": "[path to tdx-guest-ubuntu-25.04-generic.qcow2]",
+    "qcow2": "[path to tdx-guest-ubuntu-24.04-generic.qcow2]",
     "cmdline": "console=ttyS0 root=/dev/vda1",
     "mok_list": "[path to MokList.bin]",
     "mok_list_trusted": "[path to MokListTrusted.bin]",
