@@ -50,11 +50,11 @@ fn supported_distribution_standalone_is_accepted() {
     );
 }
 
-/// `--distribution` is optional for the helper baseline measurement path.
+/// `--distribution` is optional when `--ovmf-version` is provided directly.
 /// Omitting it should still succeed and should not trigger distribution validation errors.
 #[test]
-fn distribution_is_optional_for_baseline_measurement() {
-    let out = run(&[]);
+fn distribution_is_optional_when_ovmf_version_is_provided() {
+    let out = run(&["--ovmf-version", "2025.02-3ubuntu2.2"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         out.status.success(),
@@ -69,7 +69,11 @@ fn distribution_is_optional_for_baseline_measurement() {
 /// `--create-acpi-tables` without `--distribution` and without explicit `--qemu-source`/`--qemu-base-image` is rejected.
 #[test]
 fn create_acpi_tables_without_distribution_is_rejected() {
-    let out = run(&["--create-acpi-tables"]);
+    let out = run(&[
+        "--ovmf-version",
+        "2025.02-3ubuntu2.2",
+        "--create-acpi-tables",
+    ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "expected failure, got success");
     assert!(

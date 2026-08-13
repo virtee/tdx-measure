@@ -66,11 +66,11 @@ struct Cli {
     qemu_base_image: Option<String>,
 
     /// Select or override the OVMF version (accepted: edk2-stableYYYYMM or YYYY.MM-NubuntuN[.N]).
+    /// Boot#### entries: upstream OVMF 2025.05 and later measure two EV_EFI_VARIABLE_BOOT events into RTMR0.
     /// Planned independent uses (not yet integrated):
     ///   - initrd cmdline ordering: upstream OVMF 2025.08 and later prefix "initrd=initrd" rather than appending.
     ///   - fw_cfg measurement: upstream OVMF 2025.05 and later add EV_PLATFORM_CONFIG_FLAGS events for FW_CFG.BootMenu and FW_CFG.bootorder into RTMR0.
     ///   - SMBIOS measurement: upstream OVMF 2025.05 and later add EV_EFI_HANDOFF_TABLES for the SMBIOS table into RTMR0.
-    ///   - Boot#### entries: upstream OVMF 2025.05 and later measure two EV_EFI_VARIABLE_BOOT events into RTMR0.
     #[arg(long)]
     ovmf_version: Option<String>,
 
@@ -419,6 +419,7 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
             direct_boot,
             config.platform_only,
             config.runtime_only,
+            ovmf_version,
         )?;
     }
 

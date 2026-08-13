@@ -9,7 +9,7 @@ use sha2::{Digest, Sha384};
 
 use crate::num::read_le;
 use crate::util::{debug_print_log, measure_log, measure_sha384, read_file_data, utf16_encode};
-use crate::Machine;
+use crate::{Machine, OVMF_BOOT_EVENTS_VERSION};
 
 const PAGE_SIZE: u64 = 0x1000;
 const MR_EXTEND_GRANULARITY: usize = 0x100;
@@ -88,13 +88,49 @@ fn measure_tdx_efi_variable(
     Ok(measure_sha384(&data))
 }
 
-/// Loads boot order data and parses boot entry numbers based on boot mode.
-/// For direct boot, returns a simulated boot order with no boot entries.
-/// For indirect boot, reads the boot order file and extracts the list of boot entry numbers.
+/// OVMF releases before upstream 2025.05 register one boot entry, while 2025.05 and later register two.
+fn ovmf_exposes_single_boot_entry(ovmf_version: Option<(u16, u8)>) -> bool {
+    !matches!(ovmf_version, Some(v) if v >= OVMF_BOOT_EVENTS_VERSION)
+}
+
+/// Returns the BootOrder variable bytes OVMF creates for direct boot.
+pub fn direct_boot_boot_order_bytes(ovmf_version: Option<(u16, u8)>) -> Vec<u8> {
+    if ovmf_exposes_single_boot_entry(ovmf_version) {
+        vec![0x00, 0x00]
+    } else {
+        vec![0x00, 0x00, 0x01, 0x00]
+    }
+}
+
+/// Returns the Boot#### variable payloads (in BootOrder sequence) OVMF creates for direct boot.
+pub fn direct_boot_boot_variable_payloads(ovmf_version: Option<(u16, u8)>) -> Result<Vec<Vec<u8>>> {
+    if ovmf_exposes_single_boot_entry(ovmf_version) {
+        // OVMF 2025.02: single Boot0000 entry (UiApp).
+        let boot0000_hex = "090100002c0055006900410070007000000004071400c9bdb87cebf8344faaea3ee4af6516a10406140021aa2c4614760345836e8ab6f46623317fff0400";
+        let boot0000 = hex::decode(boot0000_hex).context("Failed to decode boot0000 hex string")?;
+        Ok(vec![boot0000])
+    } else {
+        // OVMF releases based on upstream 2025.05: Boot0000 (BootManagerMenuApp) and Boot0001 (EFI Firmware Setup).
+        let boot0000_hex = "090100002c0042006f006f0074004d0061006e0061006700650072004d0065006e007500410070007000000004071400c9bdb87cebf8344faaea3ee4af6516a104061400dc5bc2eef267954db1d5f81b2039d11d7fff0400";
+        let boot0000 = hex::decode(boot0000_hex).context("Failed to decode boot0000 hex string")?;
+
+        let boot0001_hex = "010100002c0045004600490020004600690072006d007700610072006500200053006500740075007000000004071400c9bdb87cebf8344faaea3ee4af6516a10406140021aa2c4614760345836e8ab6f46623317fff0400";
+        let boot0001 = hex::decode(boot0001_hex).context("Failed to decode boot0001 hex string")?;
+
+        Ok(vec![boot0000, boot0001])
+    }
+}
+
+/// Returns (boot_order_bytes, boot_entry_numbers) for the given boot mode.
+/// For direct boot, returns simulated BootOrder bytes (OVMF-version-dependent) and an empty entry list.
+/// For indirect boot, reads the boot order file and parses the UINT16 entry numbers.
 fn parse_boot_order(machine: &Machine) -> Result<(Vec<u8>, Vec<u16>)> {
     if machine.direct_boot {
         // Direct boot: simulated boot order data
-        Ok((vec![0, 0], Vec::new()))
+        let ovmf_version = machine.ovmf_version.ok_or_else(|| {
+            anyhow!("OVMF version is required for direct boot boot-order measurement")
+        })?;
+        Ok((direct_boot_boot_order_bytes(Some(ovmf_version)), Vec::new()))
     } else if !machine.boot_order.is_empty() {
         // Indirect boot: read and parse the boot order file
         let boot_order_data = read_file_data(machine.boot_order)?;
@@ -297,11 +333,9 @@ impl<'a> Tdvf<'a> {
         ];
 
         if machine.direct_boot {
-            // Boot0000 data for direct boot mode
-            let boot0000_hex = "090100002c0055006900410070007000000004071400c9bdb87cebf8344faaea3ee4af6516a10406140021aa2c4614760345836e8ab6f46623317fff0400";
-            let boot0000 =
-                hex::decode(boot0000_hex).context("Failed to decode boot0000 hex string")?;
-            rtmr0_log.push(measure_sha384(&boot0000));
+            for boot_data in direct_boot_boot_variable_payloads(machine.ovmf_version)? {
+                rtmr0_log.push(measure_sha384(&boot_data));
+            }
         } else {
             for boot_entry_num in boot_entries {
                 if let Some(boot_data) = load_boot_variable_if_exists(boot_entry_num, machine)? {
@@ -434,5 +468,107 @@ impl MemoryAcceptor {
         new_ranges.push((true, start, end));
         new_ranges.sort_by_key(|&(_, start, _)| start);
         self.ranges = new_ranges;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_machine(ovmf_version: Option<&str>) -> Machine<'static> {
+        Machine::builder()
+            .cpu_count(4)
+            .memory_size(0x80000000)
+            .firmware("")
+            .kernel_cmdline("")
+            .acpi_tables("")
+            .rsdp("")
+            .table_loader("")
+            .boot_order("")
+            .path_boot_xxxx("")
+            .direct_boot(true)
+            .metadata_path(std::path::Path::new(""))
+            .create_acpi_table(false)
+            .distribution("")
+            .maybe_ovmf_version(ovmf_version.and_then(crate::parse_ovmf_version))
+            .build()
+    }
+
+    #[test]
+    fn parse_boot_order_ovmf_2025_02_returns_single_entry() {
+        for ver in ["2025.02-3ubuntu2.2", "2025.02-3ubuntu2"] {
+            let m = dummy_machine(Some(ver));
+            let (data, entries) = parse_boot_order(&m).unwrap();
+            assert_eq!(
+                data,
+                vec![0x00, 0x00],
+                "OVMF {ver} should have single-entry BootOrder"
+            );
+            assert!(entries.is_empty());
+            assert!(ovmf_exposes_single_boot_entry(crate::parse_ovmf_version(
+                ver
+            )));
+        }
+    }
+
+    #[test]
+    fn parse_boot_order_ovmf_2025_05_and_later_returns_two_entries() {
+        for version in ["edk2-stable202505", "2025.11-3ubuntu7"] {
+            let m = dummy_machine(Some(version));
+            let (data, entries) = parse_boot_order(&m).unwrap();
+            assert_eq!(
+                data,
+                vec![0x00, 0x00, 0x01, 0x00],
+                "OVMF {version} should have two-entry BootOrder"
+            );
+            assert!(entries.is_empty());
+            assert!(!ovmf_exposes_single_boot_entry(crate::parse_ovmf_version(
+                version
+            )));
+        }
+        assert!(ovmf_exposes_single_boot_entry(None));
+    }
+
+    #[test]
+    fn parse_boot_order_none_ovmf_version_errors_for_direct_boot() {
+        let m = dummy_machine(None);
+        let err = parse_boot_order(&m).unwrap_err();
+        assert!(
+            err.to_string().contains("OVMF version is required"),
+            "expected OVMF-version-required error, got: {err}",
+        );
+    }
+
+    #[test]
+    fn direct_boot_boot_variables_match_ovmf_version() {
+        let boot0000_old = hex::decode(
+            "090100002c0055006900410070007000000004071400c9bdb87cebf8344faaea3ee4af6516a10406140021aa2c4614760345836e8ab6f46623317fff0400"
+        ).unwrap();
+
+        let boot0000_new = hex::decode(
+            "090100002c0042006f006f0074004d0061006e0061006700650072004d0065006e007500410070007000000004071400c9bdb87cebf8344faaea3ee4af6516a104061400dc5bc2eef267954db1d5f81b2039d11d7fff0400"
+        ).unwrap();
+        let boot0001_new = hex::decode(
+            "010100002c0045004600490020004600690072006d007700610072006500200053006500740075007000000004071400c9bdb87cebf8344faaea3ee4af6516a10406140021aa2c4614760345836e8ab6f46623317fff0400"
+        ).unwrap();
+
+        let expected = vec![
+            (Some("2025.02-3ubuntu2.2"), vec![boot0000_old.clone()]),
+            (
+                Some("2025.11-3ubuntu7"),
+                vec![boot0000_new.clone(), boot0001_new.clone()],
+            ),
+            (None, vec![boot0000_old]),
+        ];
+
+        for (version, expected_payloads) in expected {
+            let actual =
+                direct_boot_boot_variable_payloads(version.and_then(crate::parse_ovmf_version))
+                    .unwrap();
+            assert_eq!(
+                actual, expected_payloads,
+                "OVMF version mismatch for {version:?}"
+            );
+        }
     }
 }

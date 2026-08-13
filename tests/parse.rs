@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tdx_measure::{ImageConfig, Machine};
+use tdx_measure::{parse_ovmf_version, ImageConfig, Machine};
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -107,6 +107,7 @@ fn measure_platform_matches_expected_json_for_every_fixture() {
             .metadata_path(&metadata_path)
             .create_acpi_table(false)
             .distribution("")
+            .ovmf_version(parse_ovmf_version("2025.02-3ubuntu2.2").expect("invalid ovmf version"))
             .build();
 
         let m = machine
