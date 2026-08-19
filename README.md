@@ -400,3 +400,10 @@ Three other runtime measurement registers (`RTMR`) correspond to different boot 
 `RTMR[1]` contains measurements of the `kernel` for direct boot. For indirect boot, it contains measurement for the bootchain a.k.a. `gpt` (GUID Partition Table), `shim`, and `grub`.
 
 `RTMR[2]` contains measurements of the kernel `cmdline` and `initrd` for direct boot. For indirect boot, it also contains the measurements of machine owner key [(MOK) variables](https://github.com/rhboot/shim/blob/main/MokVars.txt).
+
+### Known Limitations
+
+Starting with OVMF 2025.05, up to six `fw_cfg` items are measured into `RTMR[0]` when they are present on the machine: `etc/extra-pci-roots`, `BootMenu`, `etc/boot-menu-wait`, `etc/reserved-memory-end`, `opt/ovmf/X-PciMmio64Mb`, and `bootorder`.
+At the moment, the project only reproduces the `BootMenu` and `bootorder` measurements, since QEMU populates these two by default.
+The remaining four items are only populated when non-default QEMU flags are used, for example by listing `opt/ovmf/X-PciMmio64Mb` in the `fw_cfg` field of a custom QEMU shape, and reproducing them is planned for a future release.
+If your VM configuration populates any of those four items, the tool's `RTMR[0]` prediction will not match the value measured by a real TD.

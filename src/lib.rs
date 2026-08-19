@@ -24,6 +24,9 @@ mod util;
 /// The upstream release that introduced the second direct-boot Boot#### event.
 pub const OVMF_BOOT_EVENTS_VERSION: (u16, u8) = (2025, 5);
 
+/// The upstream release that introduced fw_cfg (BootMenu + bootorder) measurement into RTMR0.
+pub const OVMF_FW_CFG_VERSION: (u16, u8) = (2025, 5);
+
 /// Package metadata for a single supported distribution.
 pub struct DistributionDef {
     pub name: &'static str,
