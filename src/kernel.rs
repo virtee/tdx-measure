@@ -122,13 +122,26 @@ pub(crate) fn measure_rtmr1_direct(
     Ok(measure_log(&rtmr1_log))
 }
 
+/// OVMF releases before upstream 2025.08 append "initrd=initrd" to the kernel command line, while 2025.08 and later prefix it.
+/// See: https://github.com/tianocore/edk2/commit/a2ac0fea49996ab484c1a8761c234cc354f5a760.
+fn ovmf_appends_initrd_cmdline(ovmf_version: (u16, u8)) -> bool {
+    ovmf_version < crate::OVMF_INITRD_PREFIX_VERSION
+}
+
 /// Measures RTMR2 for direct boot from file paths.
-pub(crate) fn measure_rtmr2_direct(initrd_path: &str, kernel_cmdline: &str) -> Result<Vec<u8>> {
+pub(crate) fn measure_rtmr2_direct(
+    initrd_path: &str,
+    kernel_cmdline: &str,
+    ovmf_version: (u16, u8),
+) -> Result<Vec<u8>> {
     // Reads our initrd file
     let initrd_data = fs::read(initrd_path).context("Failed to read initrd file")?;
 
-    // OVFM adds initrd to the command line
-    let cmdline = kernel_cmdline.to_string() + " initrd=initrd";
+    let cmdline: String = if ovmf_appends_initrd_cmdline(ovmf_version) {
+        format!("{} initrd=initrd", kernel_cmdline)
+    } else {
+        format!("initrd=initrd {}", kernel_cmdline)
+    };
 
     // Compute RTMR2 log
     let rtmr2_log = vec![
@@ -138,4 +151,96 @@ pub(crate) fn measure_rtmr2_direct(initrd_path: &str, kernel_cmdline: &str) -> R
 
     debug_print_log("RTMR2", &rtmr2_log);
     Ok(measure_log(&rtmr2_log))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn write_temp_initrd(content: &[u8]) -> NamedTempFile {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(content).unwrap();
+        f
+    }
+
+    // The threshold is (2025, 8); 2025.02/2025.05 must still append, 2025.08+ must prefix.
+    #[test]
+    fn initrd_prefix_version_boundary_is_exactly_2025_08() {
+        assert!(ovmf_appends_initrd_cmdline((2025, 2)));
+        assert!(ovmf_appends_initrd_cmdline((2025, 5)));
+        assert!(!ovmf_appends_initrd_cmdline((2025, 8)));
+        assert!(!ovmf_appends_initrd_cmdline((2025, 11)));
+    }
+
+    #[test]
+    fn measure_rtmr2_direct_prefix_and_append_produce_different_measurements() {
+        let initrd_content = b"initrd content";
+        let temp = write_temp_initrd(initrd_content);
+        let initrd_path = temp.path().to_str().unwrap();
+
+        let cmdline: &str = "root=/dev/sda1 console=ttyS0";
+
+        // The upstream stable 2025.08 release prepends "initrd=initrd".
+        let result_prefix_upstream = measure_rtmr2_direct(initrd_path, cmdline, (2025, 8)).unwrap();
+
+        // Later upstream releases have the same behavior.
+        let result_prefix_later_upstream =
+            measure_rtmr2_direct(initrd_path, cmdline, (2025, 11)).unwrap();
+
+        // Earlier upstream release appends "initrd=initrd".
+        let result_append_earlier_upstream =
+            measure_rtmr2_direct(initrd_path, cmdline, (2025, 2)).unwrap();
+
+        let expected_log = vec![
+            crate::util::measure_cmdline("initrd=initrd root=/dev/sda1 console=ttyS0"),
+            measure_sha384(initrd_content),
+        ];
+        assert_eq!(
+            result_prefix_upstream,
+            measure_log(&expected_log),
+            "prefix path produced unexpected RTMR2"
+        );
+        assert_eq!(
+            result_prefix_later_upstream, result_prefix_upstream,
+            "later upstream release should preserve the upstream prefix behavior"
+        );
+
+        // Verify append result matches expected cmdline "root=/dev/sda1 console=ttyS0 initrd=initrd".
+        let expected_log_append = vec![
+            crate::util::measure_cmdline("root=/dev/sda1 console=ttyS0 initrd=initrd"),
+            measure_sha384(initrd_content),
+        ];
+        assert_eq!(
+            result_append_earlier_upstream,
+            measure_log(&expected_log_append),
+            "append path produced unexpected RTMR2"
+        );
+
+        // Prefix-path OVMF with empty cmdline produces "initrd=initrd ".
+        let result_prefix_empty_cmdline = measure_rtmr2_direct(initrd_path, "", (2025, 8)).unwrap();
+
+        // Append-path OVMF with empty cmdline produces " initrd=initrd".
+        let result_append_empty = measure_rtmr2_direct(initrd_path, "", (2025, 2)).unwrap();
+
+        let expected_prefix_empty = vec![
+            crate::util::measure_cmdline("initrd=initrd "),
+            measure_sha384(initrd_content),
+        ];
+        let expected_append_empty = vec![
+            crate::util::measure_cmdline(" initrd=initrd"),
+            measure_sha384(initrd_content),
+        ];
+        assert_eq!(
+            result_prefix_empty_cmdline,
+            measure_log(&expected_prefix_empty),
+            "prefix path with empty cmdline produced unexpected RTMR2"
+        );
+        assert_eq!(
+            result_append_empty,
+            measure_log(&expected_append_empty),
+            "append path with empty cmdline produced unexpected RTMR2"
+        );
+    }
 }
