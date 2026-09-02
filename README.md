@@ -147,6 +147,7 @@ Create `metadata.json` file with the below metadata:
     - `netdevs`: list of strings, each emitted as `-netdev <value>`.
     - `devices`: list of strings, each emitted as `-device <value>`. **Order is part of the API contract**: QEMU's PCI auto-slot assignment iterates `-device` arguments in command-line order and picks the lowest free slot, so `devices` must be authored in the same order as the reference launch you are mirroring. A `slot=N` argument on a `pcie-root-port` is only a hint and shifts if the slot is already taken by an earlier auto-assigned device. Order within `globals` / `objects` / `netdevs` / `fw_cfg` does not influence the ACPI tables.
     - `fw_cfg`: list of strings, each emitted as `-fw_cfg <value>`.
+    - `serial` *(optional)*: value passed to `-serial`. When omitted, no `-serial` flag is emitted. **Only `"stdio"` is currently supported**; the field is rejected at parse time if set to anything else.
 
 - `direct`: Direct boot specific configuration used to compute RTMR[1] and RTMR[2]
   - `kernel`: Path to file (e.g., `vmlinuz`) of kernel image, which will be directly loaded and executed by OVMF.
