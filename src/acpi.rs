@@ -427,6 +427,9 @@ fn build_qemu_args(qemu: Option<&QemuShape>, cpus: u8, memory: &str) -> Result<V
             for v in &q.fw_cfg {
                 push(&mut args, "-fw_cfg", v);
             }
+            if let Some(serial) = &q.serial {
+                push(&mut args, "-serial", serial.as_str());
+            }
         }
         None => {
             // Canonical direct-boot defaults: minimal args from
@@ -974,6 +977,7 @@ mod tests {
                 "virtio-rng-pci".into(),
             ],
             fw_cfg: vec!["name=opt/ovmf/X-PciMmio64Mb,string=262144".into()],
+            serial: Some("stdio".to_string()),
         };
         let args = build_qemu_args(Some(&shape), 8, "16384M")
             .unwrap()
@@ -1015,6 +1019,8 @@ mod tests {
                 "virtio-rng-pci",
                 "-fw_cfg",
                 "name=opt/ovmf/X-PciMmio64Mb,string=262144",
+                "-serial",
+                "stdio",
             ]
         );
     }
@@ -1030,6 +1036,7 @@ mod tests {
             netdevs: vec![],
             devices: vec![],
             fw_cfg: vec![],
+            serial: Some("stdio".to_string()),
         };
         let args = build_qemu_args(Some(&shape), 4, "8192M")
             .unwrap()
@@ -1061,6 +1068,7 @@ mod tests {
             netdevs: vec![],
             devices: vec![],
             fw_cfg: vec![],
+            serial: Some("stdio".to_string()),
         };
         let args = build_qemu_args(Some(&shape), 2, "4096M")
             .unwrap()
@@ -1097,6 +1105,7 @@ mod tests {
                 netdevs: vec![],
                 devices: vec![],
                 fw_cfg: vec![],
+                serial: Some("stdio".to_string()),
             };
             assert!(
                 build_qemu_args(Some(&shape), 2, "4096M").is_err(),
@@ -1118,6 +1127,7 @@ mod tests {
                 netdevs: vec![],
                 devices: vec![],
                 fw_cfg: vec![],
+                serial: Some("stdio".to_string()),
             };
             assert!(
                 build_qemu_args(Some(&shape), 2, "4096M").is_ok(),
@@ -1138,6 +1148,7 @@ mod tests {
             netdevs: vec![],
             devices: vec![],
             fw_cfg: vec![],
+            serial: Some("stdio".to_string()),
         };
         let args = build_qemu_args(Some(&shape), 2, "4096M")
             .unwrap()
@@ -1164,6 +1175,7 @@ mod tests {
             netdevs: vec![],
             devices: vec![],
             fw_cfg: vec![],
+            serial: Some("stdio".to_string()),
         };
         let args = build_qemu_args(Some(&shape_empty), 2, "4096M")
             .unwrap()
@@ -1177,5 +1189,40 @@ mod tests {
             .map(|(_, v)| v.as_str())
             .unwrap();
         assert_eq!(machine_arg, "smm=off,pic=off");
+    }
+
+    #[test]
+    fn qemu_shape_rejects_non_stdio_serial_at_deserialization() {
+        // Only "-serial stdio" is supported for now; other chardevs are rejected by serde until a future release adds support for them.
+        let json = r#"{"machine": "q35", "serial": "chardev:serial0"}"#;
+        assert!(serde_json::from_str::<QemuShape>(json).is_err());
+    }
+
+    #[test]
+    fn qemu_shape_serial_defaults_to_none() {
+        let json = r#"{"machine": "q35"}"#;
+        let shape: QemuShape = serde_json::from_str(json).unwrap();
+        assert_eq!(shape.serial, None);
+    }
+
+    #[test]
+    fn build_qemu_args_omits_serial_flag_when_not_provided() {
+        let shape = QemuShape {
+            machine: "q35".into(),
+            cpu: "host".into(),
+            accel: "kvm".into(),
+            globals: vec![],
+            objects: vec![],
+            netdevs: vec![],
+            devices: vec![],
+            fw_cfg: vec![],
+            serial: None,
+        };
+        let args = build_qemu_args(Some(&shape), 2, "4096M")
+            .unwrap()
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect::<Vec<_>>();
+        assert!(!args.iter().any(|a| a == "-serial"));
     }
 }
