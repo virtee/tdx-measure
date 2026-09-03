@@ -10,8 +10,8 @@ use clap::Parser;
 use fs_err as fs;
 use std::path::{Path, PathBuf};
 use tdx_measure::{
-    parse_ovmf_version, resolve_qemu_archive_version, ImageConfig, Machine, QemuInfo, QemuPkg,
-    SUPPORTED_DISTRIBUTIONS,
+    parse_ovmf_version, parse_qemu_version, resolve_qemu_archive_version, ImageConfig, Machine,
+    QemuInfo, QemuPkg, SUPPORTED_DISTRIBUTIONS,
 };
 
 mod transcript;
@@ -221,6 +221,7 @@ impl PathResolver {
         metadata_path: &'a Path,
         create_acpi_table: bool,
         qemu_info: QemuInfo<'a>,
+        qemu_major: Option<u32>,
         ovmf_version: Option<(u16, u8)>,
     ) -> Machine<'a> {
         Machine::builder()
@@ -245,6 +246,7 @@ impl PathResolver {
             .metadata_path(metadata_path)
             .create_acpi_table(create_acpi_table)
             .maybe_qemu_version(qemu_info.version)
+            .maybe_qemu_major(qemu_major)
             .maybe_qemu_source(qemu_info.source)
             .maybe_qemu_base_image(qemu_info.base_image)
             .maybe_ovmf_version(ovmf_version)
@@ -535,6 +537,16 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
     let resolved_qemu_version =
         resolve_qemu_version_from_cli(config, direct_boot, resolve_qemu_archive_version)?;
 
+    // Parse the resolved QEMU version into the major version number that drives the kernel-patch decision at measurement time.
+    let qemu_major: Option<u32> = resolved_qemu_version
+        .as_deref()
+        .map(|ver| {
+            parse_qemu_version(ver).ok_or_else(|| {
+                anyhow!("QEMU version '{ver}' is invalid; expected a package version like '1:10.2.1+ds-1ubuntu4'")
+            })
+        })
+        .transpose()?;
+
     // When ACPI tables will actually be generated, resolve the full QEMU package (applying distribution defaults) up front so `Machine` receives concrete values instead of raw overrides.
     let qemu_info = match qemu_pkg_for_acpi_generation(
         config,
@@ -567,6 +579,7 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
         &config.metadata,
         create_acpi_table,
         qemu_info,
+        qemu_major,
         ovmf_version,
     );
 

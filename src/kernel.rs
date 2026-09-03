@@ -3,7 +3,10 @@
  * Copyright (c) 2025 Tinfoil Inc
  * SPDX-License-Identifier: Apache-2.0
  */
-use crate::{measure_log, measure_sha384, util::authenticode_sha384_hash, util::debug_print_log};
+use crate::{
+    measure_log, measure_sha384, util::authenticode_sha384_hash, util::debug_print_log,
+    QEMU_NO_KERNEL_PATCH_VERSION,
+};
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
 
@@ -92,21 +95,54 @@ fn patch_kernel(
     Ok(kd)
 }
 
+/// QEMU releases before 10.x patch the kernel header during direct boot; 10.x and later do not.
+fn qemu_patches_kernel_header(qemu_major: u32) -> bool {
+    qemu_major < QEMU_NO_KERNEL_PATCH_VERSION
+}
+
 /// Measures a QEMU-patched TDX kernel image from file paths (for direct boot).
+/// Optionally patches the kernel image based on the QEMU major version.
+fn maybe_patch_kernel(
+    kernel_data: Vec<u8>,
+    initrd_path: &str,
+    mem_size: u64,
+    acpi_data_size: u32,
+    qemu_major: u32,
+) -> Result<Vec<u8>> {
+    // Check if the kernel needs to be patched based on the QEMU major version.
+    if !qemu_patches_kernel_header(qemu_major) {
+        return Ok(kernel_data);
+    }
+
+    // Determine the size of the initrd file.
+    let initrd_size = u32::try_from(
+        fs::metadata(initrd_path)
+            .context("Failed to stat initrd file")?
+            .len(),
+    )
+    .context("Initrd file too large")?;
+
+    // Patch the kernel with the initrd size, memory size, and ACPI data size.
+    patch_kernel(&kernel_data, initrd_size, mem_size, acpi_data_size)
+        .context("Failed to patch kernel")
+}
+
 pub(crate) fn measure_rtmr1_direct(
     kernel_path: &str,
     initrd_path: &str,
     mem_size: u64,
     acpi_data_size: u32,
+    qemu_major: u32,
 ) -> Result<Vec<u8>> {
-    // Read kernel and initrd files
     let kernel_data = fs::read(kernel_path).context("Failed to read kernel file")?;
-    let initrd_data = fs::read(initrd_path).context("Failed to read initrd file")?;
-    let initrd_size = initrd_data.len() as u32;
 
-    // Patch kernel to mimic QEMU's behavior
-    let kd = patch_kernel(&kernel_data, initrd_size, mem_size, acpi_data_size)
-        .context("Failed to patch kernel")?;
+    let kd = maybe_patch_kernel(
+        kernel_data,
+        initrd_path,
+        mem_size,
+        acpi_data_size,
+        qemu_major,
+    )?;
     let kernel_hash = authenticode_sha384_hash(&kd).context("Failed to compute kernel hash")?;
 
     // Compute RTMR1 log
@@ -242,5 +278,20 @@ mod tests {
             measure_log(&expected_append_empty),
             "append path with empty cmdline produced unexpected RTMR2"
         );
+    }
+
+    #[test]
+    fn qemu_patches_kernel_header_before_version_10() {
+        assert!(qemu_patches_kernel_header(9));
+        assert!(!qemu_patches_kernel_header(10));
+        assert!(!qemu_patches_kernel_header(11));
+    }
+
+    #[test]
+    fn maybe_patch_kernel_skips_patch_for_qemu_10_and_later() {
+        let kernel = vec![1u8, 2, 3, 4];
+        // qemu_major >= 10 returns the kernel unchanged without touching the initrd path.
+        let out = maybe_patch_kernel(kernel.clone(), "/nonexistent", 0, 0, 10).unwrap();
+        assert_eq!(out, kernel);
     }
 }

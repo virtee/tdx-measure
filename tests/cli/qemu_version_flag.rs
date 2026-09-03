@@ -96,3 +96,15 @@ fn explicit_qemu_version_does_not_require_distribution() {
         "explicit version should satisfy the requirement: {stderr}",
     );
 }
+
+/// An unparseable `--qemu-version` is rejected before any measurement is attempted.
+#[test]
+fn invalid_qemu_version_is_rejected() {
+    let out = run_full(&["--qemu-version", "bogus-not-a-version"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "expected failure, got success");
+    assert!(
+        stderr.contains("is invalid"),
+        "stderr missing rejection message: {stderr}",
+    );
+}

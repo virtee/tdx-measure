@@ -34,6 +34,7 @@ pub struct Machine<'a> {
     pub metadata_path: &'a Path,
     pub create_acpi_table: bool,
     pub qemu_version: Option<&'a str>,
+    pub qemu_major: Option<u32>,
     pub qemu_source: Option<&'a str>,
     pub qemu_base_image: Option<&'a str>,
     pub ovmf_version: Option<(u16, u8)>,
@@ -73,8 +74,16 @@ impl Machine<'_> {
                 anyhow::anyhow!("OVMF version required for direct boot RTMR2 measurement")
             })?;
 
-            rtmr1 =
-                kernel::measure_rtmr1_direct(kernel_path, initrd_path, self.memory_size, 0x28000)?;
+            let qemu_major = self.qemu_major.ok_or_else(|| {
+                anyhow::anyhow!("QEMU major version required for direct boot RTMR1 measurement")
+            })?;
+            rtmr1 = kernel::measure_rtmr1_direct(
+                kernel_path,
+                initrd_path,
+                self.memory_size,
+                0x28000,
+                qemu_major,
+            )?;
             rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline, ovmf_version)?;
         } else {
             // Indirect boot
@@ -140,8 +149,17 @@ impl Machine<'_> {
                 anyhow::anyhow!("OVMF version required for direct boot RTMR2 measurement")
             })?;
 
+            let qemu_major = self.qemu_major.ok_or_else(|| {
+                anyhow::anyhow!("QEMU major version required for direct boot RTMR1 measurement")
+            })?;
             // WARN : Carefull, when measuring the runtime only, we only compute the measurement for memory size > 0xb0000000
-            rtmr1 = kernel::measure_rtmr1_direct(kernel_path, initrd_path, 0xb0000000, 0x28000)?;
+            rtmr1 = kernel::measure_rtmr1_direct(
+                kernel_path,
+                initrd_path,
+                0xb0000000,
+                0x28000,
+                qemu_major,
+            )?;
             rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline, ovmf_version)?;
         } else {
             // Indirect boot
@@ -174,5 +192,42 @@ impl Machine<'_> {
             rtmr1,
             rtmr2,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A direct-boot `Machine` with no `firmware`/`acpi_tables` fixtures, since `measure_runtime` never reads them.
+    fn direct_boot_machine(qemu_major: Option<u32>) -> Machine<'static> {
+        Machine::builder()
+            .cpu_count(1)
+            .memory_size(0)
+            .firmware("")
+            .kernel_cmdline("")
+            .acpi_tables("")
+            .rsdp("")
+            .table_loader("")
+            .boot_order("")
+            .path_boot_xxxx("")
+            .direct_boot(true)
+            .metadata_path(Path::new(""))
+            .create_acpi_table(false)
+            .kernel("kernel")
+            .initrd("initrd")
+            .ovmf_version((2025, 5))
+            .maybe_qemu_major(qemu_major)
+            .build()
+    }
+
+    #[test]
+    fn measure_runtime_errors_without_qemu_major() {
+        let err = direct_boot_machine(None).measure_runtime().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("QEMU major version required for direct boot RTMR1 measurement"),
+            "unexpected error: {err}",
+        );
     }
 }
