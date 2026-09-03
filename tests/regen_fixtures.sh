@@ -7,7 +7,7 @@
 # Bytes are checked into the repo so `cargo test --release --test parse` doesn't
 # need Docker or KVM on the developer's machine.
 #
-# Requirements: Docker (with buildx), and `tests/fixtures/OVMF.fd` already
+# Requirements: Docker, and `tests/fixtures/OVMF.fd` already
 # fetched (run tests/fetch_ovmf.sh first).
 #
 # For the `canonical-defaults` fixture (no `qemu` block — falls through to
@@ -22,6 +22,14 @@ repo="$(cd "$here/.." && pwd)"
 fixtures="$here/fixtures"
 tdx_measure="$repo/target/release/tdx-measure"
 
+if ! command -v jq > /dev/null; then
+    echo "jq is required; install it before running $0" >&2
+    exit 1
+fi
+if ! command -v docker > /dev/null; then
+    echo "Docker is required; install it before running $0" >&2
+    exit 1
+fi
 if [[ ! -x "$tdx_measure" ]]; then
     echo "build the CLI first: cargo build --release" >&2
     exit 1
@@ -45,6 +53,14 @@ declare -i ok=0 fail=0
 for dir in "$fixtures"/*/; do
     name="$(basename "$dir")"
     [[ -f "$dir/metadata.json" ]] || continue
+
+    # The virtual firmware filename is fixture-specific and is declared by its metadata.
+    bios="$(jq -er '.boot_config.bios' "$dir/metadata.json")"
+    if [[ ! -f "$dir/$bios" ]]; then
+        echo "$dir/$bios missing; run $here/fetch_ovmf.sh first" >&2
+        fail+=1
+        continue
+    fi
 
     # A fixture whose `acpi_tables.bin` came from a live TD (via
     # `extract_config_files.py`) ships a `SOURCE-OF-TRUTH.md`. Those bytes are

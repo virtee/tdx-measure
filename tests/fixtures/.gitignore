@@ -6,3 +6,7 @@
 
 # OVMF.fd is large and reproducible; let tests/fetch_ovmf.sh download it.
 OVMF.fd
+
+# upstream-edk2-<version> fixtures build their own OVMF binaries and version markers via tests/fetch_ovmf.sh.
+upstream-edk2-*/*.fd
+upstream-edk2-*/.edk2-version
