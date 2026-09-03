@@ -12,7 +12,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use crate::docker::{
-    build_docker_image, run_docker_container, QemuPkg, DOCKERFILE_QEMU_ACPI_DUMP, OVMF_IN_CONTAINER,
+    build_docker_image, run_docker_container, QemuPkg, DOCKERFILE_QEMU, OVMF_IN_CONTAINER,
 };
 use crate::util::read_file_data;
 use crate::{ImageConfig, Machine, QemuShape};
@@ -466,10 +466,7 @@ pub fn generate_acpi_tables(metadata_path: &Path, pkg: &QemuPkg) -> Result<()> {
 
     // Stage the Dockerfile into a temp build context so `docker build` finds it.
     let build_ctx = tempfile::tempdir().context("Failed to create docker build context")?;
-    fs_err::write(
-        build_ctx.path().join("Dockerfile.qemu-acpi-dump"),
-        DOCKERFILE_QEMU_ACPI_DUMP,
-    )?;
+    fs_err::write(build_ctx.path().join("Dockerfile.qemu"), DOCKERFILE_QEMU)?;
     build_docker_image(build_ctx.path(), pkg, acpi_tables_name)?;
 
     // Bind-mounted output dir must be writable by the container's non-root `qemu-user`.

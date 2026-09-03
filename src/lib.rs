@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
-pub use docker::QemuPkg;
+pub use docker::{resolve_qemu_archive_version, QemuPkg};
 pub use machine::{Machine, QemuInfo};
 pub use tdvf::{
     direct_boot_boot_order_bytes, direct_boot_boot_variable_payloads,
