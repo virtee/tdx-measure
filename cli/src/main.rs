@@ -9,7 +9,9 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use fs_err as fs;
 use std::path::{Path, PathBuf};
-use tdx_measure::{parse_ovmf_version, ImageConfig, Machine, QemuInfo, SUPPORTED_DISTRIBUTIONS};
+use tdx_measure::{
+    parse_ovmf_version, ImageConfig, Machine, QemuInfo, QemuPkg, SUPPORTED_DISTRIBUTIONS,
+};
 
 mod transcript;
 use transcript::generate_transcript;
@@ -217,7 +219,6 @@ impl PathResolver {
         direct_boot: bool,
         metadata_path: &'a Path,
         create_acpi_table: bool,
-        distribution: &'a str,
         qemu_info: QemuInfo<'a>,
         ovmf_version: Option<(u16, u8)>,
     ) -> Machine<'a> {
@@ -242,12 +243,45 @@ impl PathResolver {
             .direct_boot(direct_boot)
             .metadata_path(metadata_path)
             .create_acpi_table(create_acpi_table)
-            .distribution(distribution)
             .maybe_qemu_version(qemu_info.version)
             .maybe_qemu_source(qemu_info.source)
             .maybe_qemu_base_image(qemu_info.base_image)
             .maybe_ovmf_version(ovmf_version)
             .build()
+    }
+}
+
+/// Resolves the QEMU source, version, and base image to fetch/build for a given distribution, applying pinned per-distribution defaults and honoring any explicit overrides.
+fn qemu_pkg_for<'a>(distribution: &'a str, qemu_info: QemuInfo<'a>) -> Result<QemuPkg<'a>> {
+    if distribution.is_empty() {
+        // Case 1: no --distribution given, so every QEMU parameter must come from an explicit override.
+        let source = qemu_info.source.ok_or_else(|| {
+            anyhow!("--qemu-source is required when --distribution is not specified")
+        })?;
+        let version = qemu_info.version.unwrap_or("");
+        let base_image = qemu_info.base_image.ok_or_else(|| {
+            anyhow!("--qemu-base-image is required when --distribution is not specified")
+        })?;
+        Ok(QemuPkg {
+            source,
+            version,
+            base_image,
+        })
+    } else {
+        let def = SUPPORTED_DISTRIBUTIONS.find(distribution).ok_or_else(|| {
+            anyhow!(
+                "unsupported distribution: {distribution}. Supported: {}",
+                SUPPORTED_DISTRIBUTIONS.join(", ")
+            )
+        })?;
+
+        // Case 2: --distribution given and a field has no override -> use that distribution's pinned default.
+        // Case 3: --distribution given and a field has an override -> the override wins for that field.
+        Ok(QemuPkg {
+            source: qemu_info.source.unwrap_or(def.qemu_source),
+            version: qemu_info.version.unwrap_or(def.qemu_default_version),
+            base_image: qemu_info.base_image.unwrap_or(def.qemu_base_image),
+        })
     }
 }
 
@@ -352,6 +386,14 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
         }
     }
 
+    // Resolve the QEMU package to fetch/build for ACPI generation.
+    // This is only meaningful when the ACPI table will be created.
+    let mut qemu_info = QemuInfo {
+        version: qemu_version,
+        source: qemu_source,
+        base_image: qemu_base_image,
+    };
+
     // Check usage of --create-acpi-tables flag
     if create_acpi_table {
         if config.runtime_only {
@@ -369,6 +411,13 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
             if distribution.is_none() && (qemu_source.is_none() || qemu_base_image.is_none()) {
                 return Err(anyhow!("--create-acpi-tables requires --distribution or both --qemu-source and --qemu-base-image"));
             }
+
+            let pkg = qemu_pkg_for(distribution.unwrap_or(""), qemu_info)?;
+            qemu_info = QemuInfo {
+                version: Some(pkg.version),
+                source: Some(pkg.source),
+                base_image: Some(pkg.base_image),
+            };
         }
     }
 
@@ -402,12 +451,7 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
         direct_boot,
         &config.metadata,
         create_acpi_table,
-        distribution.unwrap_or(""),
-        QemuInfo {
-            version: qemu_version,
-            source: qemu_source,
-            base_image: qemu_base_image,
-        },
+        qemu_info,
         ovmf_version,
     );
 
@@ -475,4 +519,90 @@ fn main() -> Result<()> {
     process_measurements(&cli, &image_config)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shorthand for constructing `QemuInfo` from three plain `Option<&str>` values in tests.
+    fn qemu_info<'a>(
+        version: Option<&'a str>,
+        source: Option<&'a str>,
+        base_image: Option<&'a str>,
+    ) -> QemuInfo<'a> {
+        QemuInfo {
+            version,
+            source,
+            base_image,
+        }
+    }
+
+    #[test]
+    fn qemu_pkg_for_known_distros_returns_pinned_defaults() {
+        let p = qemu_pkg_for("ubuntu:25.04", qemu_info(None, None, None)).unwrap();
+        assert_eq!(p.source, "ppa:kobuk-team/tdx-release");
+        assert_eq!(p.version, "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2");
+        assert!(p.base_image.contains("@sha256:"));
+
+        let p = qemu_pkg_for("ubuntu:26.04", qemu_info(None, None, None)).unwrap();
+        assert_eq!(p.source, "main");
+        assert_eq!(p.version, "1:10.2.1+ds-1ubuntu4");
+        assert!(p.base_image.contains("@sha256:"));
+    }
+
+    #[test]
+    fn qemu_pkg_for_rejects_unknown_distro() {
+        assert!(qemu_pkg_for("debian:12", qemu_info(None, None, None)).is_err());
+    }
+
+    #[test]
+    fn qemu_pkg_for_honors_version_override() {
+        let p = qemu_pkg_for(
+            "ubuntu:26.04",
+            qemu_info(Some("1:10.3.0-1ubuntu1"), None, None),
+        )
+        .unwrap();
+        assert_eq!(p.source, "main");
+        assert_eq!(p.version, "1:10.3.0-1ubuntu1");
+
+        // Even an empty override (caller asked for "latest") wins over the pin.
+        let p = qemu_pkg_for("ubuntu:26.04", qemu_info(Some(""), None, None)).unwrap();
+        assert_eq!(p.version, "");
+    }
+
+    #[test]
+    fn qemu_pkg_for_honors_source_and_base_image_overrides() {
+        let p = qemu_pkg_for(
+            "ubuntu:26.04",
+            qemu_info(
+                Some("1:10.3.0-1ubuntu1"),
+                Some("ppa:my-team/my-ppa"),
+                Some("ubuntu:26.04@sha256:abc123"),
+            ),
+        )
+        .unwrap();
+        assert_eq!(p.source, "ppa:my-team/my-ppa");
+        assert_eq!(p.version, "1:10.3.0-1ubuntu1");
+        assert_eq!(p.base_image, "ubuntu:26.04@sha256:abc123");
+    }
+
+    #[test]
+    fn qemu_pkg_for_without_distribution_requires_source_and_base_image() {
+        // Missing both source and base_image
+        assert!(qemu_pkg_for("", qemu_info(None, None, None)).is_err());
+        // Missing base_image
+        assert!(qemu_pkg_for("", qemu_info(Some("1.0"), Some("main"), None)).is_err());
+        // Missing source
+        assert!(qemu_pkg_for("", qemu_info(Some("1.0"), None, Some("img@sha256:abc"))).is_err());
+        // All provided - should succeed
+        let p = qemu_pkg_for(
+            "",
+            qemu_info(Some("1.0"), Some("main"), Some("ubuntu:26.04@sha256:abc")),
+        )
+        .unwrap();
+        assert_eq!(p.source, "main");
+        assert_eq!(p.version, "1.0");
+        assert_eq!(p.base_image, "ubuntu:26.04@sha256:abc");
+    }
 }

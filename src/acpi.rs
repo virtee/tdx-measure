@@ -7,18 +7,15 @@
 //! This module provides functionality to load ACPI tables for QEMU from files.
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{info, warn};
+use log::info;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use crate::docker::{
+    build_docker_image, run_docker_container, QemuPkg, DOCKERFILE_QEMU_ACPI_DUMP, OVMF_IN_CONTAINER,
+};
 use crate::util::read_file_data;
-use crate::{ImageConfig, Machine, QemuInfo, QemuShape, SUPPORTED_DISTRIBUTIONS};
-
-const DOCKERFILE_QEMU_ACPI_DUMP: &str = include_str!("../Dockerfile.qemu-acpi-dump");
-const CONTAINER_NAME: &str = "acpi-tables-generator";
-const IMAGE_NAME: &str = "acpi-tables-generator";
-const OVMF_IN_CONTAINER: &str = "/usr/share/ovmf/OVMF.fd";
+use crate::{ImageConfig, Machine, QemuShape};
 
 const LDR_LENGTH: usize = 4096;
 const FIXED_STRING_LEN: usize = 56;
@@ -32,15 +29,18 @@ pub struct Tables {
 impl Machine<'_> {
     pub fn build_tables(&self) -> Result<Tables> {
         if self.direct_boot && self.create_acpi_table {
-            generate_acpi_tables(
-                self.metadata_path,
-                self.distribution,
-                QemuInfo {
-                    version: self.qemu_version,
-                    source: self.qemu_source,
-                    base_image: self.qemu_base_image,
-                },
-            )?;
+            let pkg = QemuPkg {
+                source: self
+                    .qemu_source
+                    .context("QEMU source not resolved for ACPI generation")?,
+                version: self
+                    .qemu_version
+                    .context("QEMU version not resolved for ACPI generation")?,
+                base_image: self
+                    .qemu_base_image
+                    .context("QEMU base image not resolved for ACPI generation")?,
+            };
+            generate_acpi_tables(self.metadata_path, &pkg)?;
         }
 
         let tables = read_file_data(self.acpi_tables)?;
@@ -333,51 +333,6 @@ fn find_acpi_table(tables: &[u8], signature: &str) -> Result<(u32, u32, u32)> {
     bail!("Table not found: {signature}");
 }
 
-/// Describes how to fetch the QEMU source package for a given distribution.
-struct QemuPkg<'a> {
-    /// `ppa:<OWNER>/<NAME>` -> `pull-ppa-source --ppa ppa:<OWNER>/<NAME> qemu $VERSION`
-    /// `main` -> `pull-lp-source qemu $VERSION` (or latest in main when empty)
-    source: &'a str,
-    /// Version handed to the source fetcher. Empty string == "let the fetcher
-    /// pick the current main-archive version" (only meaningful for `main`).
-    version: &'a str,
-    /// Immutable OCI reference for the base image (e.g. `ubuntu:26.04@sha256:...`).
-    base_image: &'a str,
-}
-
-fn qemu_pkg_for<'a>(distribution: &'a str, qemu_info: QemuInfo<'a>) -> Result<QemuPkg<'a>> {
-    if distribution.is_empty() {
-        // Case 1: no --distribution given, so every QEMU parameter must come from an explicit override.
-        let source = qemu_info.source.ok_or_else(|| {
-            anyhow!("--qemu-source is required when --distribution is not specified")
-        })?;
-        let version = qemu_info.version.unwrap_or("");
-        let base_image = qemu_info.base_image.ok_or_else(|| {
-            anyhow!("--qemu-base-image is required when --distribution is not specified")
-        })?;
-        Ok(QemuPkg {
-            source,
-            version,
-            base_image,
-        })
-    } else {
-        let def = SUPPORTED_DISTRIBUTIONS.find(distribution).ok_or_else(|| {
-            anyhow!(
-                "unsupported distribution: {distribution}. Supported: {}",
-                SUPPORTED_DISTRIBUTIONS.join(", ")
-            )
-        })?;
-
-        // Case 2: --distribution given and a field has no override -> use that distribution's pinned default.
-        // Case 3: --distribution given and a field has an override -> the override wins for that field.
-        Ok(QemuPkg {
-            source: qemu_info.source.unwrap_or(def.qemu_source),
-            version: qemu_info.version.unwrap_or(def.qemu_default_version),
-            base_image: qemu_info.base_image.unwrap_or(def.qemu_base_image),
-        })
-    }
-}
-
 /// Enforces Intel TDX constraints on `smm` and `pic` in a QEMU `-machine` string.
 /// Mirrors QEMU's tdx_kvm_init(): https://github.com/qemu/qemu/blob/2d3df8abca265c9bcc9e438d691d561592060998/target/i386/kvm/tdx.c#L679-L700
 /// If absent, defaults to =off; if explicitly set to =on, returns an error.
@@ -473,136 +428,11 @@ fn resolve_metadata_path(metadata_path: &Path, path: &str) -> PathBuf {
     metadata_path.parent().unwrap_or(Path::new(".")).join(path)
 }
 
-/// Returns the host's `kvm` group id, if the group exists. Used to grant the
-/// container access to `/dev/kvm` and `/dev/vhost-vsock`.
-fn kvm_group_id() -> Option<String> {
-    let out = Command::new("getent")
-        .args(["group", "kvm"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8(out.stdout)
-        .ok()?
-        .lines()
-        .next()
-        .and_then(|line| line.split(':').nth(2).map(str::to_owned))
-}
-
-fn build_docker_image(dockerfile_dir: &Path, pkg: &QemuPkg, acpi_tables_name: &str) -> Result<()> {
-    info!("Building Docker image: {IMAGE_NAME}");
-    if pkg.source.starts_with("ppa:") {
-        info!("QEMU source: {} (QEMU {})", pkg.source, pkg.version);
-    } else {
-        info!(
-            "QEMU source: {} archive ({})",
-            pkg.source,
-            if pkg.version.is_empty() {
-                "latest"
-            } else {
-                pkg.version
-            }
-        );
-    }
-
-    // Determine the QEMU_SOURCE arg for the Dockerfile.
-    // "ppa:<owner>/<name>" -> Dockerfile uses "ppa" and passes the PPA name via QEMU_PPA build-arg.
-    // "main" -> Dockerfile uses "main".
-    let (docker_source, ppa_name) = if let Some(ppa) = pkg.source.strip_prefix("ppa:") {
-        ("ppa".to_string(), Some(format!("ppa:{ppa}")))
-    } else {
-        (pkg.source.to_string(), None)
-    };
-
-    let mut cmd = Command::new("docker");
-    cmd.arg("build")
-        .args(["--progress", "plain", "--tag", IMAGE_NAME])
-        .arg("--build-arg")
-        .arg(format!("DISTRIBUTION={}", pkg.base_image))
-        .arg("--build-arg")
-        .arg(format!("QEMU_SOURCE={docker_source}"))
-        .arg("--build-arg")
-        .arg(format!("QEMU_VERSION={}", pkg.version))
-        .arg("--build-arg")
-        .arg(format!("ACPI_TABLES_NAME={acpi_tables_name}"));
-    if let Some(ppa) = &ppa_name {
-        cmd.arg("--build-arg").arg(format!("QEMU_PPA={ppa}"));
-    }
-    cmd.arg("--file")
-        .arg(dockerfile_dir.join("Dockerfile.qemu-acpi-dump"))
-        .arg(dockerfile_dir);
-
-    let status = cmd.status().context("Failed to invoke `docker build`")?;
-    if !status.success() {
-        bail!("docker build failed (exit {status})");
-    }
-    Ok(())
-}
-
-fn run_docker_container(
-    bios: &Path,
-    output_dir: &Path,
-    qemu_args: &[OsString],
-    need_kvm: bool,
-    need_vhost_vsock: bool,
-) -> Result<()> {
-    info!("Running QEMU container to generate ACPI tables...");
-    // The Dockerfile skips `subdir('pc-bios')` in QEMU's meson build (the option
-    // ROMs aren't needed to dump ACPI tables and adding them ~doubles image size).
-    // As a result QEMU prints "rom: file kvmvapic.bin … No such file or directory"
-    // (and similar for `linuxboot_dma.bin` if a PCI NIC is in play). Harmless —
-    // the ACPI dump runs before any ROM would be loaded.
-    warn!(
-        "NOTE: harmless ROM-file errors (kvmvapic.bin, linuxboot_dma.bin, ...) from QEMU are expected; \
-         pc-bios is skipped in the patched build."
-    );
-
-    let mut cmd = Command::new("docker");
-    cmd.args(["run", "--rm", "--name", CONTAINER_NAME]);
-
-    // The `kvm` group also owns `/dev/vhost-vsock` on Linux, so add it whenever
-    // either device matters.
-    if let Some(gid) = kvm_group_id() {
-        cmd.arg("--group-add").arg(gid);
-    }
-    if need_kvm {
-        if !Path::new("/dev/kvm").exists() {
-            bail!(
-                "accelerator requires /dev/kvm but the host has none \
-                 (use `accel: \"tcg\"` in the qemu block to skip KVM)"
-            );
-        }
-        cmd.args(["--device", "/dev/kvm:/dev/kvm"]);
-    }
-    if need_vhost_vsock && Path::new("/dev/vhost-vsock").exists() {
-        cmd.args(["--device", "/dev/vhost-vsock:/dev/vhost-vsock"]);
-    }
-    cmd.arg("-v")
-        .arg(format!("{}:{OVMF_IN_CONTAINER}:ro", bios.display()));
-    cmd.arg("-v")
-        .arg(format!("{}:/output", output_dir.display()));
-    cmd.arg(IMAGE_NAME);
-    cmd.args(qemu_args);
-
-    let status = cmd.status().context("Failed to invoke `docker run`")?;
-    if !status.success() {
-        bail!("QEMU execution failed (exit {status})");
-    }
-    Ok(())
-}
-
 /// Generates ACPI tables for direct boot by building and running a
 /// patched-QEMU Docker container. The patched QEMU writes the
 /// `etc/acpi/tables` blob it would have exposed via fw_cfg to
 /// `boot_config.acpi_tables` and exits before TD entry.
-pub fn generate_acpi_tables(
-    metadata_path: &Path,
-    distribution: &str,
-    qemu_info: QemuInfo,
-) -> Result<()> {
-    let pkg = qemu_pkg_for(distribution, qemu_info)?;
-
+pub fn generate_acpi_tables(metadata_path: &Path, pkg: &QemuPkg) -> Result<()> {
     let raw_metadata = fs_err::read_to_string(metadata_path)
         .context("Failed to read metadata.json for ACPI generation")?;
     let image_config: ImageConfig = serde_json::from_str(&raw_metadata)
@@ -640,7 +470,7 @@ pub fn generate_acpi_tables(
         build_ctx.path().join("Dockerfile.qemu-acpi-dump"),
         DOCKERFILE_QEMU_ACPI_DUMP,
     )?;
-    build_docker_image(build_ctx.path(), &pkg, acpi_tables_name)?;
+    build_docker_image(build_ctx.path(), pkg, acpi_tables_name)?;
 
     // Bind-mounted output dir must be writable by the container's non-root `qemu-user`.
     use std::os::unix::fs::PermissionsExt;
@@ -915,87 +745,6 @@ mod tests {
             })
             .collect();
         assert_eq!(rsdt_ptrs.len(), 5);
-    }
-
-    /// Shorthand for constructing `QemuInfo` from three plain `Option<&str>` values in tests.
-    fn qemu_info<'a>(
-        version: Option<&'a str>,
-        source: Option<&'a str>,
-        base_image: Option<&'a str>,
-    ) -> QemuInfo<'a> {
-        QemuInfo {
-            version,
-            source,
-            base_image,
-        }
-    }
-
-    #[test]
-    fn qemu_pkg_for_known_distros_returns_pinned_defaults() {
-        let p = qemu_pkg_for("ubuntu:25.04", qemu_info(None, None, None)).unwrap();
-        assert_eq!(p.source, "ppa:kobuk-team/tdx-release");
-        assert_eq!(p.version, "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2");
-        assert!(p.base_image.contains("@sha256:"));
-
-        let p = qemu_pkg_for("ubuntu:26.04", qemu_info(None, None, None)).unwrap();
-        assert_eq!(p.source, "main");
-        assert_eq!(p.version, "1:10.2.1+ds-1ubuntu4");
-        assert!(p.base_image.contains("@sha256:"));
-    }
-
-    #[test]
-    fn qemu_pkg_for_rejects_unknown_distro() {
-        assert!(qemu_pkg_for("debian:12", qemu_info(None, None, None)).is_err());
-    }
-
-    #[test]
-    fn qemu_pkg_for_honors_version_override() {
-        let p = qemu_pkg_for(
-            "ubuntu:26.04",
-            qemu_info(Some("1:10.3.0-1ubuntu1"), None, None),
-        )
-        .unwrap();
-        assert_eq!(p.source, "main");
-        assert_eq!(p.version, "1:10.3.0-1ubuntu1");
-
-        // Even an empty override (caller asked for "latest") wins over the pin.
-        let p = qemu_pkg_for("ubuntu:26.04", qemu_info(Some(""), None, None)).unwrap();
-        assert_eq!(p.version, "");
-    }
-
-    #[test]
-    fn qemu_pkg_for_honors_source_and_base_image_overrides() {
-        let p = qemu_pkg_for(
-            "ubuntu:26.04",
-            qemu_info(
-                Some("1:10.3.0-1ubuntu1"),
-                Some("ppa:my-team/my-ppa"),
-                Some("ubuntu:26.04@sha256:abc123"),
-            ),
-        )
-        .unwrap();
-        assert_eq!(p.source, "ppa:my-team/my-ppa");
-        assert_eq!(p.version, "1:10.3.0-1ubuntu1");
-        assert_eq!(p.base_image, "ubuntu:26.04@sha256:abc123");
-    }
-
-    #[test]
-    fn qemu_pkg_for_without_distribution_requires_source_and_base_image() {
-        // Missing both source and base_image
-        assert!(qemu_pkg_for("", qemu_info(None, None, None)).is_err());
-        // Missing base_image
-        assert!(qemu_pkg_for("", qemu_info(Some("1.0"), Some("main"), None)).is_err());
-        // Missing source
-        assert!(qemu_pkg_for("", qemu_info(Some("1.0"), None, Some("img@sha256:abc"))).is_err());
-        // All provided - should succeed
-        let p = qemu_pkg_for(
-            "",
-            qemu_info(Some("1.0"), Some("main"), Some("ubuntu:26.04@sha256:abc")),
-        )
-        .unwrap();
-        assert_eq!(p.source, "main");
-        assert_eq!(p.version, "1.0");
-        assert_eq!(p.base_image, "ubuntu:26.04@sha256:abc");
     }
 
     #[test]

@@ -8,6 +8,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
+pub use docker::QemuPkg;
 pub use machine::{Machine, QemuInfo};
 pub use tdvf::{
     direct_boot_boot_order_bytes, direct_boot_boot_variable_payloads,
@@ -17,6 +18,7 @@ pub use tdvf::{
 use util::{measure_log, measure_sha384};
 
 mod acpi;
+mod docker;
 mod image;
 mod kernel;
 mod machine;

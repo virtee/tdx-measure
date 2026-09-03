@@ -539,7 +539,6 @@ mod tests {
             .direct_boot(true)
             .metadata_path(std::path::Path::new(""))
             .create_acpi_table(false)
-            .distribution("")
             .maybe_ovmf_version(ovmf_version.and_then(crate::parse_ovmf_version))
             .build()
     }
@@ -688,7 +687,6 @@ mod tests {
             .direct_boot(true)
             .metadata_path(std::path::Path::new(""))
             .create_acpi_table(false)
-            .distribution("")
             .maybe_ovmf_version(crate::parse_ovmf_version("edk2-stable202505"))
             .build();
 
