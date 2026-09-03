@@ -1,0 +1,20 @@
+{
+    "boot_config": {
+        "cpus": 32,
+        "memory": "16G",
+        "bios": "OVMF-edk2-stable202502.fd",
+        "acpi_tables": "acpi_tables.bin",
+        "qemu": {
+            "machine": "q35,kernel_irqchip=split",
+            "cpu": "host",
+            "accel": "kvm",
+            "devices": ["virtio-rng-pci"],
+            "serial": "stdio"
+        }
+    },
+    "direct": {
+        "kernel": "/dev/null",
+        "initrd": "/dev/null",
+        "cmdline": ""
+    }
+}
