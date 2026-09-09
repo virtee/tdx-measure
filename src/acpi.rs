@@ -327,29 +327,44 @@ struct QemuPkg<'a> {
     version: &'a str,
     /// Immutable OCI digest of the base image (`sha256:...`).
     image_digest: &'static str,
+    base_image: &'static str,
+    source_checksum: &'static str,
 }
 
 fn qemu_pkg_for<'a>(distribution: &str, version_override: Option<&'a str>) -> Result<QemuPkg<'a>> {
     // Pinned defaults for reproducibility; override via `--qemu-version`.
-    let (source, default_version, image_digest): (&'static str, &'static str, &'static str) = match distribution {
+    let (source, default_version, base_image, image_digest, source_checksum): (&'static str, &'static str, &'static str, &'static str, &'static str) = match distribution {
         "ubuntu:25.04" => (
             "ppa",
             "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2",
+            "ubuntu:25.04",
             "sha256:27771fb7b40a58237c98e8d3e6b9ecdd9289cec69a857fccfb85ff36294dac20",
+            "",
         ),
         "ubuntu:26.04" => (
             "main",
             "1:10.2.1+ds-1ubuntu4",
+            "ubuntu:26.04",
             "sha256:f3d28607ddd78734bb7f71f117f3c6706c666b8b76cbff7c9ff6e5718d46ff64",
+            "",
+        ),
+        "qemu:10.1.0" => (
+            "upstream",
+            "10.1.0",
+            "ubuntu:26.04",
+            "sha256:f3d28607ddd78734bb7f71f117f3c6706c666b8b76cbff7c9ff6e5718d46ff64",
+            "e0517349b50ca73ebec2fa85b06050d5c463ca65c738833bd8fc1f15f180be51",
         ),
         other => bail!(
-            "Unsupported distribution: {other}. Supported: ubuntu:25.04, ubuntu:26.04"
+            "Unsupported distribution: {other}. Supported: ubuntu:25.04, ubuntu:26.04, qemu:10.1.0"
         ),
     };
     Ok(QemuPkg {
         source,
         version: version_override.unwrap_or(default_version),
         image_digest,
+        base_image,
+        source_checksum,
     })
 }
 
@@ -442,13 +457,14 @@ fn build_docker_image(
         ),
     }
 
-    let pinned_image = format!("{distribution}@{}", pkg.image_digest);
+    let pinned_image = format!("{}@{}", pkg.base_image, pkg.image_digest);
     let status = Command::new("docker")
         .arg("build")
-        .args(["--progress", "plain", "--tag", IMAGE_NAME])
+        .args(["--tag", IMAGE_NAME])
         .arg("--build-arg").arg(format!("DISTRIBUTION={pinned_image}"))
         .arg("--build-arg").arg(format!("QEMU_SOURCE={}", pkg.source))
         .arg("--build-arg").arg(format!("QEMU_VERSION={}", pkg.version))
+        .arg("--build-arg").arg(format!("QEMU_SHA256={}", pkg.source_checksum))
         .arg("--build-arg").arg(format!("ACPI_TABLES_NAME={acpi_tables_name}"))
         .arg("--file").arg(dockerfile_dir.join("Dockerfile.qemu-acpi-dump"))
         .arg(dockerfile_dir)
@@ -466,6 +482,8 @@ fn run_docker_container(
     qemu_args: &[OsString],
     need_kvm: bool,
     need_vhost_vsock: bool,
+    pci_hole64_start: Option<&str>,
+    pci_hole64_end: Option<&str>,
 ) -> Result<()> {
     info!("Running QEMU container to generate ACPI tables...");
     // The Dockerfile skips `subdir('pc-bios')` in QEMU's meson build (the option
@@ -497,6 +515,12 @@ fn run_docker_container(
     }
     if need_vhost_vsock && Path::new("/dev/vhost-vsock").exists() {
         cmd.args(["--device", "/dev/vhost-vsock:/dev/vhost-vsock"]);
+    }
+    if let Some(start) = pci_hole64_start {
+        cmd.args(["--env", &format!("TDX_MEASURE_PCI_HOLE64_START={start}")]);
+    }
+    if let Some(end) = pci_hole64_end {
+        cmd.args(["--env", &format!("TDX_MEASURE_PCI_HOLE64_END={end}")]);
     }
     cmd.arg("-v").arg(format!("{}:{OVMF_IN_CONTAINER}:ro", bios.display()));
     cmd.arg("-v").arg(format!("{}:/output", output_dir.display()));
@@ -573,7 +597,15 @@ pub fn generate_acpi_tables(
         .unwrap_or(true);
     let need_vhost_vsock = boot_config.qemu.is_some();
 
-    run_docker_container(&bios, output_dir.path(), &qemu_args, need_kvm, need_vhost_vsock)?;
+    run_docker_container(
+        &bios,
+        output_dir.path(),
+        &qemu_args,
+        need_kvm,
+        need_vhost_vsock,
+        boot_config.qemu.as_ref().and_then(|q| q.pci_hole64_start.as_deref()),
+        boot_config.qemu.as_ref().and_then(|q| q.pci_hole64_end.as_deref()),
+    )?;
 
     // Move the produced ACPI tables into place; `fs::copy` would inherit the
     // container's restrictive 0600 from the source, so widen to 0644 after.
@@ -855,6 +887,8 @@ mod tests {
     fn build_qemu_args_qemu_block_passes_fields_verbatim_and_in_documented_order() {
         let shape = QemuShape {
             machine: "q35,kernel_irqchip=split,smm=off,pic=off".into(),
+            pci_hole64_start: None,
+            pci_hole64_end: None,
             cpu: "Skylake-Server,phys-bits=46".into(),
             accel: "tcg".into(),
             globals: vec!["q35-pcihost.pci-hole64-size=4096G".into()],

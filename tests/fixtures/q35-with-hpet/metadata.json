@@ -6,6 +6,8 @@
         "acpi_tables": "acpi_tables.bin",
         "qemu": {
             "machine": "q35,kernel_irqchip=split,memory-backend=mem0,smm=off,pic=off",
+            "pci_hole64_start": null,
+            "pci_hole64_end": null,
             "cpu": "Skylake-Server,phys-bits=46",
             "accel": "tcg",
             "globals": [

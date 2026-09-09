@@ -7,8 +7,10 @@ FROM ${DISTRIBUTION}
 # QEMU_SOURCE selects how the source tarball is fetched:
 #   "ppa"  -> pull-ppa-source from ppa:kobuk-team/tdx-release (Intel TDX QEMU build for 24.04/25.04)
 #   "main" -> pull-lp-source from the distribution's main archive
+#   "upstream" -> download the signed-release tarball from download.qemu.org
 ARG QEMU_SOURCE=ppa
 ARG QEMU_VERSION=
+ARG QEMU_SHA256=
 ARG ACPI_TABLES_NAME
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -17,6 +19,8 @@ RUN apt-get update && \
     apt-get install --no-install-recommends --yes \
         build-essential \
         git \
+        curl \
+        xz-utils \
         ubuntu-dev-tools \
         libglib2.0-dev \
         meson \
@@ -30,6 +34,10 @@ RUN if [ "$QEMU_SOURCE" = "ppa" ]; then \
         pull-ppa-source --ppa ppa:kobuk-team/tdx-release qemu ${QEMU_VERSION}; \
     elif [ "$QEMU_SOURCE" = "main" ]; then \
         pull-lp-source qemu ${QEMU_VERSION}; \
+    elif [ "$QEMU_SOURCE" = "upstream" ]; then \
+        curl -fsSLO "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"; \
+        echo "${QEMU_SHA256}  qemu-${QEMU_VERSION}.tar.xz" | sha256sum --check -; \
+        tar -xf "qemu-${QEMU_VERSION}.tar.xz"; \
     else \
         echo "Unknown QEMU_SOURCE: $QEMU_SOURCE"; exit 1; \
     fi
@@ -48,12 +56,15 @@ USER qemu-user
 ARG acpi_tables_dump_loc='\n\n    int fd = open("\/output\/'"${ACPI_TABLES_NAME}"'", O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);\n    if(fd != -1) {\n        int ret = write(fd, (uint8_t *)tables.table_data->data, tables.table_data->len);\n        if (ret < tables.table_data->len) {\n            printf("Error: Failed to write the acpi tables\\n");\n        } else {\n            printf("Successfully wrote the acpi tables to the file \\"'"${ACPI_TABLES_NAME}"'\\"\\n");\n        }\n    } else {\n        printf("Error: Failed to create acpi_tables file.\\n");\n    }\n    exit(0);'
 ARG acpi_build_c="hw/i386/acpi-build.c"
 ARG acpi_common_c="hw/i386/acpi-common.c"
+ARG q35_c="hw/pci-host/q35.c"
 ARG meson_build="meson.build"
 
 # The subdir('tests') reference moved inside an `if want_tools` block in QEMU 10.x and is now indented;
 # match optional leading whitespace so both layouts get commented out alongside subdir('pc-bios').
 RUN perl -i -0pe 's/(acpi_build_update\(void \*build_opaque\)[\s\S]*?acpi_build\([^;]*;)/\1'"$acpi_tables_dump_loc"'/gs' "$acpi_build_c" && \
     perl -i -pe 's/x86ms->eoi_intercept_unsupported;/1;/g' "$acpi_build_c" "$acpi_common_c" && \
+    perl -i -0pe 's/(static uint64_t q35_host_get_pci_hole64_start_value\(Object \*obj\)\n\{)/\1\n    const char *override = getenv("TDX_MEASURE_PCI_HOLE64_START");\n    if (override != NULL) { return strtoull(override, NULL, 0); }/s' "$q35_c" && \
+    perl -i -0pe 's/(hole64_end = ROUND_UP\(hole64_start \+ s->mch\.pci_hole64_size, 1ULL << 30\);)/\1\n    const char *end_override = getenv("TDX_MEASURE_PCI_HOLE64_END");\n    if (end_override != NULL) { value = strtoull(end_override, NULL, 0); visit_type_uint64(v, name, \&value, errp); return; }\n    if (getenv("TDX_MEASURE_PCI_HOLE64_START") != NULL) { value = hole64_end; visit_type_uint64(v, name, \&value, errp); return; }/s' "$q35_c" && \
     perl -i -pe "s/^(\s*)(subdir\('pc-bios'\)|subdir\('tests'\))/\$1# \$2/g" "$meson_build"
 
 # Configure QEMU with minimal features to reduce build time and image size - only KVM acceleration is needed for ACPI table generation

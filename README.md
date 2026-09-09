@@ -85,6 +85,8 @@ Create `metadata.json` file with the below metadata:
 
 - `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`. Each field is a thin pass-through to QEMU. When present, the QEMU command is built from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`). When absent, the tool falls back to the Canonical direct-boot args. Fields:
   - `machine` *(required when block is present)*: value passed verbatim to `-machine`, e.g. `"q35,kernel_irqchip=split,memory-backend=mem0,smm=off,pic=off"`.
+  - `pci_hole64_start` *(optional)*: deterministic 64-bit PCI aperture start used only by the patched ACPI dumper. This reproduces the window that live VFIO BARs would establish without requiring those host devices during offline generation.
+  - `pci_hole64_end` *(optional)*: exclusive end of that aperture. Set this when VFIO BAR sizing expands the window beyond the configured `pci-hole64-size`.
   - `cpu` *(optional, default `"host"`)*: value passed verbatim to `-cpu`. Use a named model with an explicit `phys-bits=N` (e.g. `"Skylake-Server,phys-bits=46"`) to make the run independent of the host CPU.
   - `accel` *(optional, default `"kvm"`)*: value passed verbatim to `-accel`. Use `"tcg"` to skip KVM (CI runners without `/dev/kvm`, ARM hosts via x86 emulation, …).
   - `globals`: list of strings, each emitted as `-global <value>`.
@@ -108,7 +110,7 @@ These are calculated by the tool automatically.
 
 When `--create-acpi-tables` is passed, the tool builds a small Docker image that
 patches QEMU to dump `etc/acpi/tables` and exits before TD entry. This requires
-a working `docker` (with buildx) and, when `accel: "kvm"` is in effect, KVM on
+a working `docker` and, when `accel: "kvm"` is in effect, KVM on
 the host. Each supported distribution pins a known-good QEMU source version
 (`1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2` for `ubuntu:25.04`, `1:10.2.1+ds-1ubuntu4`
 for `ubuntu:26.04`) so the same metadata + CLI produces the same ACPI bytes
@@ -121,7 +123,13 @@ main archive:
 --create-acpi-tables ubuntu:26.04                              # default pin
 --create-acpi-tables ubuntu:26.04 1:10.2.1+ds-1ubuntu5         # explicit version
 --create-acpi-tables ubuntu:26.04 ""                           # current main-archive tip
+--create-acpi-tables qemu:10.1.0                              # pinned upstream release
 ```
+
+The `qemu:10.1.0` target downloads the upstream release tarball, verifies its
+pinned SHA-256 checksum, and builds it on the pinned Ubuntu 26.04 base image.
+This is useful when the measured deployment runs upstream QEMU rather than an
+Ubuntu source package.
 
 ### Indirect Boot
 

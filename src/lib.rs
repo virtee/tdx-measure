@@ -56,6 +56,10 @@ pub struct BootConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QemuShape {
     pub machine: String,
+    /// Optional deterministic replacement for the VFIO-derived 64-bit PCI
+    /// aperture start used by the patched ACPI dumper.
+    pub pci_hole64_start: Option<String>,
+    pub pci_hole64_end: Option<String>,
     #[serde(default = "default_cpu")]
     pub cpu: String,
     #[serde(default = "default_accel")]
