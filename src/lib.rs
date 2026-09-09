@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
 pub use docker::{resolve_qemu_archive_version, QemuPkg};
-pub use machine::{Machine, QemuInfo};
+pub use machine::Machine;
 pub use tdvf::{
     direct_boot_boot_order_bytes, direct_boot_boot_variable_payloads,
     ovmf_exposes_smbios_measurement,

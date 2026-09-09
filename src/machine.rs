@@ -4,6 +4,7 @@
  * Copyright (c) 2025-2026 Intel Corporation
  * SPDX-License-Identifier: Apache-2.0
  */
+use crate::docker::QemuPkg;
 use crate::tdvf::Tdvf;
 use crate::{image, kernel, TdxMeasurements};
 use anyhow::{Context, Result};
@@ -33,19 +34,9 @@ pub struct Machine<'a> {
     pub direct_boot: bool,
     pub metadata_path: &'a Path,
     pub create_acpi_table: bool,
-    pub qemu_version: Option<&'a str>,
     pub qemu_major: Option<u32>,
-    pub qemu_source: Option<&'a str>,
-    pub qemu_base_image: Option<&'a str>,
+    pub qemu_pkg: Option<QemuPkg<'a>>,
     pub ovmf_version: Option<(u16, u8)>,
-}
-
-/// The QEMU source, version, and base image to use for a Machine.
-/// Grouped into one struct so these three same-typed `Option<&str>` values are set and read by name, not by position.
-pub struct QemuInfo<'a> {
-    pub version: Option<&'a str>,
-    pub source: Option<&'a str>,
-    pub base_image: Option<&'a str>,
 }
 
 impl Machine<'_> {

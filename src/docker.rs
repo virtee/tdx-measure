@@ -17,6 +17,7 @@ const VERSION_RESOLVER_IMAGE_NAME: &str = "qemu-version-resolver";
 pub(crate) const OVMF_IN_CONTAINER: &str = "/usr/share/ovmf/OVMF.fd";
 
 /// Describes how to fetch the QEMU source package for a given distribution.
+#[derive(Debug)]
 pub struct QemuPkg<'a> {
     /// `ppa:<OWNER>/<NAME>` -> `pull-ppa-source --ppa ppa:<OWNER>/<NAME> qemu $VERSION`
     /// `main` -> `pull-lp-source qemu $VERSION`

@@ -29,18 +29,11 @@ pub struct Tables {
 impl Machine<'_> {
     pub fn build_tables(&self) -> Result<Tables> {
         if self.direct_boot && self.create_acpi_table {
-            let pkg = QemuPkg {
-                source: self
-                    .qemu_source
-                    .context("QEMU source not resolved for ACPI generation")?,
-                version: self
-                    .qemu_version
-                    .context("QEMU version not resolved for ACPI generation")?,
-                base_image: self
-                    .qemu_base_image
-                    .context("QEMU base image not resolved for ACPI generation")?,
-            };
-            generate_acpi_tables(self.metadata_path, &pkg)?;
+            let pkg = self
+                .qemu_pkg
+                .as_ref()
+                .context("QEMU package not resolved for ACPI generation")?;
+            generate_acpi_tables(self.metadata_path, pkg)?;
         }
 
         let tables = read_file_data(self.acpi_tables)?;
