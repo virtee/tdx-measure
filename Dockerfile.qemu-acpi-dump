@@ -4,11 +4,15 @@
 ARG DISTRIBUTION=ubuntu:25.04
 FROM ${DISTRIBUTION}
 
-# QEMU_SOURCE selects how the source tarball is fetched:
+# QEMU_SOURCE selects how the source is fetched:
 #   "ppa"  -> pull-ppa-source from ppa:kobuk-team/tdx-release (Intel TDX QEMU build for 24.04/25.04)
 #   "main" -> pull-lp-source from the distribution's main archive
+#   "url"  -> download a source tarball from QEMU_URL and verify it against QEMU_SHA256
 ARG QEMU_SOURCE=ppa
 ARG QEMU_VERSION=
+# Only used when QEMU_SOURCE=url: source-tarball URL and its expected SHA-256 (hex).
+ARG QEMU_URL=
+ARG QEMU_SHA256=
 ARG ACPI_TABLES_NAME
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -21,7 +25,10 @@ RUN apt-get update && \
         libglib2.0-dev \
         meson \
         ninja-build \
-        python3-venv && \
+        python3-venv \
+        ca-certificates \
+        curl \
+        xz-utils && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -30,6 +37,14 @@ RUN if [ "$QEMU_SOURCE" = "ppa" ]; then \
         pull-ppa-source --ppa ppa:kobuk-team/tdx-release qemu ${QEMU_VERSION}; \
     elif [ "$QEMU_SOURCE" = "main" ]; then \
         pull-lp-source qemu ${QEMU_VERSION}; \
+    elif [ "$QEMU_SOURCE" = "url" ]; then \
+        if [ -z "$QEMU_URL" ] || [ -z "$QEMU_SHA256" ]; then \
+            echo "QEMU_SOURCE=url requires QEMU_URL and QEMU_SHA256"; exit 1; \
+        fi && \
+        curl -fSL -o /qemu-src.tar "$QEMU_URL" && \
+        echo "${QEMU_SHA256}  /qemu-src.tar" | sha256sum -c - && \
+        tar -xf /qemu-src.tar -C / && \
+        rm -f /qemu-src.tar; \
     else \
         echo "Unknown QEMU_SOURCE: $QEMU_SOURCE"; exit 1; \
     fi

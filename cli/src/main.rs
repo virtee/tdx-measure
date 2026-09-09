@@ -51,6 +51,22 @@ struct Cli {
     /// `pull-lp-source`'s current main-archive pick.
     #[arg(long, num_args = 1..=2, value_names = ["DISTRIBUTION", "QEMU_VERSION"])]
     create_acpi_tables: Option<Vec<String>>,
+
+    /// Apply QEMU-style kernel boot-params patching before measuring RTMR1.
+    /// Pass `--patch-kernel` for kernels before Ubuntu:26.04,
+    /// 26.04 and above kernels are loaded via the EFI stub and measured as-is.
+    #[arg(long, default_value_t = false)]
+    patch_kernel: bool,
+
+    /// Build QEMU from a source tarball at this URL (hash-verified against
+    /// --qemu-source-sha256) instead of the distribution's PPA/main package.
+    /// Only used with --create-acpi-tables; both flags must be given together.
+    #[arg(long, value_name = "URL")]
+    qemu_source_url: Option<String>,
+
+    /// Expected SHA-256 (hex) of the --qemu-source-url tarball.
+    #[arg(long, value_name = "HEX")]
+    qemu_source_sha256: Option<String>,
 }
 
 /// Helper struct to resolve and store file paths
@@ -138,6 +154,9 @@ impl PathResolver {
         create_acpi_table: bool,
         distribution: &'a str,
         qemu_version: Option<&'a str>,
+        patch_kernel: bool,
+        qemu_source_url: Option<&'a str>,
+        qemu_source_sha256: Option<&'a str>,
     ) -> Machine<'a> {
         Machine::builder()
             .cpu_count(self.paths.cpu_count)
@@ -161,6 +180,9 @@ impl PathResolver {
             .create_acpi_table(create_acpi_table)
             .distribution(distribution)
             .maybe_qemu_version(qemu_version)
+            .patch_kernel(patch_kernel)
+            .maybe_qemu_source_url(qemu_source_url)
+            .maybe_qemu_source_sha256(qemu_source_sha256)
             .build()
     }
 }
@@ -226,6 +248,9 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
         create_acpi_table,
         distribution,
         qemu_version,
+        config.patch_kernel,
+        config.qemu_source_url.as_deref(),
+        config.qemu_source_sha256.as_deref(),
     );
 
     // Measure

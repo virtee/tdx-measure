@@ -29,9 +29,17 @@ This project is a fork of dstack-mr from the [Dstack-TEE/dstack](https://github.
       --transcript <TRANSCRIPT>             Generate a human-readable transcript of all metadata files and write to the specified file
       --create-acpi-tables <DISTRIBUTION> [<QEMU_VERSION>]
                                             Generate ACPI tables for direct boot mode. Only valid with direct boot.
-                                            <DISTRIBUTION> in {ubuntu:25.04, ubuntu:26.04}.
+                                            <DISTRIBUTION> in {ubuntu:24.04, ubuntu:25.04, ubuntu:26.04}.
                                             <QEMU_VERSION> overrides the pinned QEMU source-package version for the given distribution
                                             (pass `""` to fetch the current main-archive tip).
+      --qemu-source-url <URL>               Build QEMU from the source tarball at <URL> (hash-verified against
+                                            --qemu-source-sha256) instead of the distribution's PPA/main package.
+                                            Only used with --create-acpi-tables; must be given with --qemu-source-sha256.
+      --qemu-source-sha256 <HEX>            Expected SHA-256 (hex) of the --qemu-source-url tarball.
+      --patch-kernel                        Apply QEMU-style kernel boot-params patching before measuring RTMR[1].
+                                            Default false: the kernel is measured as-is (Ubuntu 26.04 and later, whose
+                                            kernels are loaded via the EFI stub). Pass `--patch-kernel` for pre-26.04
+                                            guests (e.g. Ubuntu 24.04 / 25.04)
   -h, --help                                Print help
   -V, --version                             Print version
 ```
@@ -92,6 +100,7 @@ Create `metadata.json` file with the below metadata:
   - `netdevs`: list of strings, each emitted as `-netdev <value>`.
   - `devices`: list of strings, each emitted as `-device <value>`. **Order is part of the API contract**: QEMU's PCI auto-slot assignment iterates `-device` arguments in command-line order and picks the lowest free slot, so `devices` must be authored in the same order as the reference launch you are mirroring. A `slot=N` argument on a `pcie-root-port` is only a hint and shifts if the slot is already taken by an earlier auto-assigned device. Order within `globals` / `objects` / `netdevs` / `fw_cfg` does not influence the ACPI tables.
   - `fw_cfg`: list of strings, each emitted as `-fw_cfg <value>`.
+  - `serial`: value passed verbatim to `-serial`.
 
 - `direct`: Direct boot specific configuration used to compute RTMR[1] and RTMR[2]
   - `kernel`: Path to file (e.g., `vmlinuz`) of kernel image, which will be directly loaded and executed by OVMF.
@@ -109,19 +118,45 @@ These are calculated by the tool automatically.
 When `--create-acpi-tables` is passed, the tool builds a small Docker image that
 patches QEMU to dump `etc/acpi/tables` and exits before TD entry. This requires
 a working `docker` (with buildx) and, when `accel: "kvm"` is in effect, KVM on
-the host. Each supported distribution pins a known-good QEMU source version
-(`1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2` for `ubuntu:25.04`, `1:10.2.1+ds-1ubuntu4`
-for `ubuntu:26.04`) so the same metadata + CLI produces the same ACPI bytes
-regardless of when the regen runs. Pass an explicit version as the second
-positional value of `--create-acpi-tables` to override the pin (e.g. to validate
-an SRU), or `""` to opt into whatever `pull-lp-source` currently picks from the
-main archive:
+the host. The base image is pinned by digest for each supported distribution.
+
+Supported `<DISTRIBUTION>` values and how QEMU is sourced:
+
+| Distribution  | QEMU source                              | Pinned QEMU version               |
+|---------------|------------------------------------------|-----------------------------------|
+| `ubuntu:24.04`| `kobuk-team/tdx-release` PPA             | `2:8.2.2+ds-0ubuntu1.4+tdx1.1`    |
+| `ubuntu:25.04`| `kobuk-team/tdx-release` PPA             | `1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2` |
+| `ubuntu:26.04`| distribution main archive                | `1:10.2.1+ds-1ubuntu4`            |
+
+For 24.04/25.04/26.04 the pinned QEMU version means the same metadata + CLI produces
+the same ACPI bytes regardless of when the regen runs. Pass an explicit version
+as the second positional value of `--create-acpi-tables` to override the pin
+(e.g. to validate an SRU), or `""` to opt into whatever `pull-lp-source`
+currently picks from the main archive:
 
 ```
 --create-acpi-tables ubuntu:26.04                              # default pin
 --create-acpi-tables ubuntu:26.04 1:10.2.1+ds-1ubuntu5         # explicit version
 --create-acpi-tables ubuntu:26.04 ""                           # current main-archive tip
 ```
+
+#### Building QEMU from a source tarball (hash-verified)
+
+Instead of the distribution's PPA/main package, you can build QEMU inside the
+container from a specific upstream source tarball, verified against a SHA-256.
+This pins QEMU exactly (independent of the PPA/archive) and works with any
+supported base distribution. Both flags must be given together:
+
+```
+--create-acpi-tables ubuntu:24.04 \
+  --qemu-source-url https://download.qemu.org/qemu-9.2.1.tar.xz \
+  --qemu-source-sha256 <sha256-hex-of-the-tarball>
+```
+
+The container downloads the tarball, runs `sha256sum -c` against it (the build
+fails closed on any mismatch), and builds from it. The tarball may be
+`.tar.xz`/`.gz`/`.bz2` and must unpack to a top-level `qemu*/` directory
+(standard upstream layout).
 
 ### Indirect Boot
 

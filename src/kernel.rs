@@ -92,12 +92,18 @@ fn patch_kernel(
     Ok(kd)
 }
 
-/// Measures a QEMU-patched TDX kernel image from file paths (for direct boot).
+/// Measures a TDX kernel image from file paths (for direct boot).
+///
+/// When `patch` is true (Ubuntu 25.04 / OVMF 2025.02), the kernel boot-params
+/// header is patched the way QEMU does before load and the patched image is
+/// measured. For 26.04 and later (OVMF >= 2025.05) the kernel is loaded via the
+/// EFI stub on the raw PE image, so it is measured as-is.
 pub(crate) fn measure_rtmr1_direct(
     kernel_path: &str,
     initrd_path: &str,
     mem_size: u64,
     acpi_data_size: u32,
+    should_patch_kernel: bool,
 ) -> Result<Vec<u8>> {
 
     // Read kernel and initrd files
@@ -105,9 +111,14 @@ pub(crate) fn measure_rtmr1_direct(
     let initrd_data = fs::read(initrd_path).context("Failed to read initrd file")?;
     let initrd_size = initrd_data.len() as u32;
 
-    // Patch kernel to mimic QEMU's behavior
-    let kd = patch_kernel(&kernel_data, initrd_size, mem_size, acpi_data_size)
-        .context("Failed to patch kernel")?;
+    // Patch the kernel to mimic QEMU's behavior only for the legacy firmware
+    // profile; newer firmware measures the kernel image as-is.
+    let kd = if should_patch_kernel {
+        patch_kernel(&kernel_data, initrd_size, mem_size, acpi_data_size)
+            .context("Failed to patch kernel")?
+    } else {
+        kernel_data
+    };
     let kernel_hash = authenticode_sha384_hash(&kd).context("Failed to compute kernel hash")?;
 
     // Compute RTMR1 log

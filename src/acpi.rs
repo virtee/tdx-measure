@@ -7,13 +7,14 @@
 //! This module provides functionality to load ACPI tables for QEMU from files.
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{info, warn};
-use std::ffi::{OsStr, OsString};
+use log::{info, warn, debug};
+use std::ffi::OsString;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::util::read_file_data;
-use crate::{ImageConfig, Machine, QemuShape};
+use crate::{BootConfig, ImageConfig, Machine, QemuShape};
 
 const DOCKERFILE_QEMU_ACPI_DUMP: &str = include_str!("../Dockerfile.qemu-acpi-dump");
 const CONTAINER_NAME: &str = "acpi-tables-generator";
@@ -31,12 +32,21 @@ pub struct Tables {
 
 impl Machine<'_> {
     pub fn build_tables(&self) -> Result<Tables> {
-        if self.direct_boot && self.create_acpi_table {
-            generate_acpi_tables(self.metadata_path, self.distribution, self.qemu_version)?;
-        }
+        let tables  = if self.direct_boot && self.create_acpi_table {
+            generate_acpi_tables(
+                self.metadata_path,
+                self.distribution,
+                self.qemu_version,
+                self.qemu_source_url,
+                self.qemu_source_sha256,
+            )?
+        } else {
+            read_file_data(self.acpi_tables)?
+        };
+        self.process_acpi_tables(tables)
+    }
 
-        let tables  = read_file_data(self.acpi_tables)?;
-
+    fn process_acpi_tables(&self, tables: Vec<u8>) -> Result<Tables> {
         let rsdp: Vec<u8> = if !self.rsdp.is_empty() {
             read_file_data(self.rsdp)?
         } else {
@@ -63,6 +73,46 @@ impl Machine<'_> {
             rsdp,
             loader,
         })
+    }
+
+    pub fn build_tables_with_boot_config(&self, boot_config: &BootConfig) -> Result<Tables> {
+        let mut acpi_tables_path = self.acpi_tables;
+        if acpi_tables_path.is_empty() {
+            acpi_tables_path = &boot_config.acpi_tables; // override if Machine::acpi_tables is empty.
+        }
+         let maybe_acpi_tables_target = if acpi_tables_path.is_empty() {
+                None
+            } else {
+                let acpi_tables_target = Path::new("").join(acpi_tables_path);
+                let acpi_tables_dir = acpi_tables_target.parent().with_context(|| {
+                    format!(
+                        "acpi_tables has no parent dir: {}",
+                        acpi_tables_target.display()
+                    )
+                })?;
+                fs_err::create_dir_all(acpi_tables_dir)?;
+                Some(acpi_tables_target)
+            };
+        let generate_tables = || {
+            let tables = generate_acpi_tables_with_qemu_args(
+                    boot_config,
+                    self.distribution,
+                    self.qemu_version,
+                    self.qemu_source_url,
+                    self.qemu_source_sha256,
+                    maybe_acpi_tables_target.as_ref(),
+                )?;
+            self.process_acpi_tables(tables)
+        };
+        if self.create_acpi_table {
+            if self.direct_boot {
+                generate_tables()
+            } else {
+                Err(anyhow!("ACPI table cannot be generated for `indirect_boot`"))
+            }
+        } else {
+            generate_tables()
+        }
     }
 }
 
@@ -317,21 +367,31 @@ fn find_acpi_table(tables: &[u8], signature: &str) -> Result<(u32, u32, u32)> {
     bail!("Table not found: {signature}");
 }
 
-/// Describes how to fetch the QEMU source package for a given distribution.
+/// Describes how to fetch the QEMU source for a given distribution.
 struct QemuPkg<'a> {
     /// `ppa` -> `pull-ppa-source --ppa ppa:kobuk-team/tdx-release qemu $VERSION`
     /// `main` -> `pull-lp-source qemu $VERSION` (or latest in main when empty)
+    /// `url`  -> download a source tarball from `url` and verify it against `sha256`
     source: &'static str,
     /// Version handed to the source fetcher. Empty string == "let the fetcher
-    /// pick the current main-archive version" (only meaningful for `main`).
+    /// pick the current main-archive version" (only meaningful for `main`/`ppa`).
     version: &'a str,
     /// Immutable OCI digest of the base image (`sha256:...`).
     image_digest: &'static str,
+    /// For `source == "url"`: the QEMU source-tarball URL and its expected
+    /// SHA-256 (hex). Ignored for `ppa`/`main`.
+    url: Option<&'a str>,
+    sha256: Option<&'a str>,
 }
 
 fn qemu_pkg_for<'a>(distribution: &str, version_override: Option<&'a str>) -> Result<QemuPkg<'a>> {
     // Pinned defaults for reproducibility; override via `--qemu-version`.
     let (source, default_version, image_digest): (&'static str, &'static str, &'static str) = match distribution {
+        "ubuntu:24.04" => (
+            "ppa",
+            "2:8.2.2+ds-0ubuntu1.4+tdx1.1",
+            "sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54",
+        ),
         "ubuntu:25.04" => (
             "ppa",
             "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2",
@@ -343,13 +403,15 @@ fn qemu_pkg_for<'a>(distribution: &str, version_override: Option<&'a str>) -> Re
             "sha256:f3d28607ddd78734bb7f71f117f3c6706c666b8b76cbff7c9ff6e5718d46ff64",
         ),
         other => bail!(
-            "Unsupported distribution: {other}. Supported: ubuntu:25.04, ubuntu:26.04"
+            "Unsupported distribution: {other}. Supported: ubuntu:24.04, ubuntu:25.04, ubuntu:26.04"
         ),
     };
     Ok(QemuPkg {
         source,
         version: version_override.unwrap_or(default_version),
         image_digest,
+        url: None,
+        sha256: None,
     })
 }
 
@@ -383,6 +445,7 @@ fn build_qemu_args(qemu: Option<&QemuShape>, cpus: u8, memory: &str) -> Vec<OsSt
             for v in &q.netdevs { push(&mut args, "-netdev", v); }
             for v in &q.devices { push(&mut args, "-device", v); }
             for v in &q.fw_cfg  { push(&mut args, "-fw_cfg", v); }
+            if let Some(serial) = &q.serial { push(&mut args, "-serial", serial); }
         }
         None => {
             // Canonical direct-boot defaults: minimal args from
@@ -436,6 +499,11 @@ fn build_docker_image(
             "QEMU source: {distribution} main archive ({})",
             if pkg.version.is_empty() { "latest" } else { pkg.version }
         ),
+        "url" => info!(
+            "QEMU source: tarball {} (sha256 {}) on {distribution}",
+            pkg.url.expect("Missing QEMU url for source type `url`"),
+            pkg.sha256.expect("Missing QEMU sha256 hash for source type `url`"),
+        ),
         other => info!(
             "QEMU source: {other} ({})",
             if pkg.version.is_empty() { "?" } else { pkg.version }
@@ -443,13 +511,18 @@ fn build_docker_image(
     }
 
     let pinned_image = format!("{distribution}@{}", pkg.image_digest);
-    let status = Command::new("docker")
-        .arg("build")
+    let mut cmd = Command::new("docker");
+    cmd.arg("build")
         .args(["--progress", "plain", "--tag", IMAGE_NAME])
         .arg("--build-arg").arg(format!("DISTRIBUTION={pinned_image}"))
         .arg("--build-arg").arg(format!("QEMU_SOURCE={}", pkg.source))
         .arg("--build-arg").arg(format!("QEMU_VERSION={}", pkg.version))
-        .arg("--build-arg").arg(format!("ACPI_TABLES_NAME={acpi_tables_name}"))
+        .arg("--build-arg").arg(format!("ACPI_TABLES_NAME={acpi_tables_name}"));
+    if pkg.source == "url" {
+        cmd.arg("--build-arg").arg(format!("QEMU_URL={}", pkg.url.expect("Missing QEMU url for source type `url`")));
+        cmd.arg("--build-arg").arg(format!("QEMU_SHA256={}", pkg.sha256.expect("Missing QEMU sha256 hash for source type `url`")));
+    }
+    let status = cmd
         .arg("--file").arg(dockerfile_dir.join("Dockerfile.qemu-acpi-dump"))
         .arg(dockerfile_dir)
         .status()
@@ -518,32 +591,76 @@ pub fn generate_acpi_tables(
     metadata_path: &Path,
     distribution: &str,
     qemu_version: Option<&str>,
-) -> Result<()> {
-    let pkg = qemu_pkg_for(distribution, qemu_version)?;
+    qemu_source_url: Option<&str>,
+    qemu_source_sha256: Option<&str>,
+) -> Result<Vec<u8>> {
 
     let raw_metadata = fs_err::read_to_string(metadata_path)
         .context("Failed to read metadata.json for ACPI generation")?;
     let image_config: ImageConfig = serde_json::from_str(&raw_metadata)
         .context("Failed to parse metadata.json for ACPI generation")?;
-    let boot_config = image_config
+    let mut boot_config = image_config
         .boot_config
-        .as_ref()
+        .clone()
         .context("boot_config is required to generate ACPI tables")?;
     let bios = resolve_metadata_path(metadata_path, &boot_config.bios)
         .canonicalize()
         .with_context(|| format!("BIOS file not found: {}", boot_config.bios))?;
     let acpi_tables_target = resolve_metadata_path(metadata_path, &boot_config.acpi_tables);
+
+    boot_config.bios = bios.display().to_string();
+
     let acpi_tables_dir = acpi_tables_target
         .parent()
         .with_context(|| format!("acpi_tables has no parent dir: {}", acpi_tables_target.display()))?;
     fs_err::create_dir_all(acpi_tables_dir)?;
-    let acpi_tables_name = acpi_tables_target
-        .file_name()
-        .and_then(OsStr::to_str)
-        .context("acpi_tables path must end with a filename")?;
+    generate_acpi_tables_with_qemu_args(&boot_config, distribution, qemu_version, qemu_source_url, qemu_source_sha256, Some(&acpi_tables_target))
+}
+
+/// Generates ACPI tables for direct boot by building and running a
+/// patched-QEMU Docker container. The patched QEMU writes the
+/// `etc/acpi/tables` blob it would have exposed via fw_cfg to
+/// `boot_config.acpi_tables` and exits before TD entry.
+pub fn generate_acpi_tables_with_qemu_args(
+    boot_config: &BootConfig,
+    distribution: &str,
+    maybe_qemu_version: Option<&str>,
+    maybe_qemu_source_url: Option<&str>,
+    maybe_qemu_source_sha256: Option<&str>,
+    maybe_acpi_tables_target: Option<&PathBuf>,
+) -> Result<Vec<u8>> {
+    let mut pkg = qemu_pkg_for(distribution, maybe_qemu_version)?;
+    // When a source URL + SHA-256 are supplied, build QEMU from that tarball
+    // (hash-verified) instead of the distribution's PPA/main package. Both must
+    // be provided together.
+    match (maybe_qemu_source_url, maybe_qemu_source_sha256) {
+        (Some(url), Some(sha256)) => {
+            pkg.source = "url";
+            pkg.url = Some(url);
+            pkg.sha256 = Some(sha256);
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            bail!("--qemu-source-url and --qemu-source-sha256 must be provided together")
+        }
+        (None, None) => {}
+    }
+
+    let bios = Path::new(&boot_config.bios);
+    // Bind-mounted output dir must be writable by the container's non-root `qemu-user`.
+
+    let output_dir = tempfile::tempdir().context("Failed to create ACPI output dir")?;
+    fs_err::set_permissions(output_dir.path(), std::fs::Permissions::from_mode(0o777))?;
+    const DEFAULT_ACPI_TABLES_NAME: &str = "acpi-tables.bin";
+    let acpi_tables_name = DEFAULT_ACPI_TABLES_NAME;
+    let generated_acpi_tables = output_dir.path().join(acpi_tables_name);
+
+
     info!(
         "ACPI gen config: cpus={}, memory={}, bios={}, target={}",
-        boot_config.cpus, boot_config.memory, bios.display(), acpi_tables_target.display()
+        boot_config.cpus,
+        boot_config.memory,
+        bios.display(),
+        generated_acpi_tables.display(),
     );
     if let Some(q) = &boot_config.qemu {
         info!(
@@ -558,14 +675,18 @@ pub fn generate_acpi_tables(
         build_ctx.path().join("Dockerfile.qemu-acpi-dump"),
         DOCKERFILE_QEMU_ACPI_DUMP,
     )?;
-    build_docker_image(build_ctx.path(), distribution, &pkg, acpi_tables_name)?;
+    build_docker_image(
+        build_ctx.path(),
+        distribution,
+        &pkg,
+        acpi_tables_name,
+    )?;
 
-    // Bind-mounted output dir must be writable by the container's non-root `qemu-user`.
-    use std::os::unix::fs::PermissionsExt;
-    let output_dir = tempfile::tempdir().context("Failed to create ACPI output dir")?;
-    fs_err::set_permissions(output_dir.path(), std::fs::Permissions::from_mode(0o777))?;
-
-    let qemu_args = build_qemu_args(boot_config.qemu.as_ref(), boot_config.cpus, &boot_config.memory);
+    let qemu_args = build_qemu_args(
+        boot_config.qemu.as_ref(),
+        boot_config.cpus,
+        &boot_config.memory,
+    );
     let need_kvm = boot_config
         .qemu
         .as_ref()
@@ -573,19 +694,33 @@ pub fn generate_acpi_tables(
         .unwrap_or(true);
     let need_vhost_vsock = boot_config.qemu.is_some();
 
-    run_docker_container(&bios, output_dir.path(), &qemu_args, need_kvm, need_vhost_vsock)?;
+    run_docker_container(
+        &bios,
+        output_dir.path(),
+        &qemu_args,
+        need_kvm,
+        need_vhost_vsock,
+    )?;
 
-    // Move the produced ACPI tables into place; `fs::copy` would inherit the
+    // Move the generated_acpi_tables ACPI tables into place; `fs::copy` would inherit the
     // container's restrictive 0600 from the source, so widen to 0644 after.
-    let produced = output_dir.path().join(acpi_tables_name);
-    if !produced.exists() {
-        bail!("ACPI tables not found in container output: {}", produced.display());
+    if !generated_acpi_tables.exists() {
+        bail!(
+            "ACPI tables not found in container output: {}",
+            generated_acpi_tables.display()
+        );
     }
-    fs_err::copy(&produced, &acpi_tables_target)?;
-    fs_err::set_permissions(&acpi_tables_target, std::fs::Permissions::from_mode(0o644))?;
-    info!("ACPI tables written to: {}", acpi_tables_target.display());
+    if let Some(acpi_tables_target) = maybe_acpi_tables_target {
+        fs_err::copy(&generated_acpi_tables, &acpi_tables_target)?;
+        fs_err::set_permissions(&acpi_tables_target, std::fs::Permissions::from_mode(0o644))?;
+        info!("ACPI tables written to: {}", acpi_tables_target.display());
+    } else {
+        debug!("ACPI tables were not copied from the temporary file target");
+    }
 
-    Ok(())
+    let tables = fs_err::read(&generated_acpi_tables)?;
+
+    Ok(tables)
 }
 
 #[cfg(test)]
@@ -812,6 +947,17 @@ mod tests {
         assert_eq!(p.version, "1:10.2.1+ds-1ubuntu4");
         assert!(p.image_digest.starts_with("sha256:"));
         assert_eq!(p.image_digest.len(), "sha256:".len() + 64);
+
+    }
+
+    #[test]
+    fn qemu_pkg_for_supports_24_04_via_ppa() {
+        let p = qemu_pkg_for("ubuntu:24.04", None).unwrap();
+        assert_eq!(p.source, "ppa");
+        // 24.04 base image is pinned by digest for reproducibility.
+        assert!(p.image_digest.starts_with("sha256:"));
+        assert_eq!(p.image_digest.len(), "sha256:".len() + 64);
+        assert!(p.url.is_none() && p.sha256.is_none());
     }
 
     #[test]
@@ -865,6 +1011,7 @@ mod tests {
                 "virtio-rng-pci".into(),
             ],
             fw_cfg: vec!["name=opt/ovmf/X-PciMmio64Mb,string=262144".into()],
+            serial: None,
         };
         let args = build_qemu_args(Some(&shape), 8, "16384M")
             .into_iter()

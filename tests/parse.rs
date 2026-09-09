@@ -102,6 +102,7 @@ fn measure_platform_matches_expected_json_for_every_fixture() {
             .metadata_path(&metadata_path)
             .create_acpi_table(false)
             .distribution("")
+            .patch_kernel(true)
             .build();
 
         let m = machine

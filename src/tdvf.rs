@@ -8,8 +8,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha384};
 
 use crate::num::read_le;
-use crate::util::{debug_print_log, measure_sha384, measure_log, utf16_encode, read_file_data};
-use crate::Machine;
+use crate::util::{debug_print_log, measure_log, measure_sha384, read_file_data, utf16_encode};
+use crate::{ImageConfig, Machine};
 
 const PAGE_SIZE: u64 = 0x1000;
 const MR_EXTEND_GRANULARITY: usize = 0x100;
@@ -64,7 +64,11 @@ fn encode_guid(guid_str: &str) -> Result<Vec<u8>> {
 }
 
 /// Measures an EFI variable event.
-fn measure_tdx_efi_variable(vendor_guid: &str, var_name: &str, var_data: Option<&[u8]>) -> Result<Vec<u8>> {
+fn measure_tdx_efi_variable(
+    vendor_guid: &str,
+    var_name: &str,
+    var_data: Option<&[u8]>,
+) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     data.extend_from_slice(&encode_guid(vendor_guid)?);
     data.extend_from_slice(&(var_name.len() as u64).to_le_bytes());
@@ -268,7 +272,16 @@ impl<'a> Tdvf<'a> {
         let cfv_hash = self.measure_cfv().context("Failed to find CFV section")?;
 
         // Build ACPI tables
-        let tables = machine.build_tables()?;
+        let tables = if let Some(ImageConfig {
+            boot_config: Some(boot_config),
+            direct: _,
+            indirect: _,
+        }) = &machine.image_config
+        {
+            machine.build_tables_with_boot_config(boot_config)?
+        } else {
+            machine.build_tables()?
+        };
         let acpi_tables_hash = measure_sha384(&tables.tables);
         let acpi_rsdp_hash = measure_sha384(&tables.rsdp);
         let acpi_loader_hash = measure_sha384(&tables.loader);
@@ -295,7 +308,8 @@ impl<'a> Tdvf<'a> {
         if machine.direct_boot {
             // Boot0000 data for direct boot mode
             let boot0000_hex = "090100002c0055006900410070007000000004071400c9bdb87cebf8344faaea3ee4af6516a10406140021aa2c4614760345836e8ab6f46623317fff0400";
-            let boot0000 = hex::decode(boot0000_hex).context("Failed to decode boot0000 hex string")?;
+            let boot0000 =
+                hex::decode(boot0000_hex).context("Failed to decode boot0000 hex string")?;
             rtmr0_log.push(measure_sha384(&boot0000));
         } else {
             for boot_entry_num in boot_entries {
@@ -307,7 +321,11 @@ impl<'a> Tdvf<'a> {
 
         // Add SbatLevel if not direct boot
         if !machine.direct_boot {
-            rtmr0_log.push(measure_tdx_efi_variable("605DAB50-E046-4300-ABB6-3DD810DD8B23", "SbatLevel", Some(b"sbat,1,2021030218\n"))?);
+            rtmr0_log.push(measure_tdx_efi_variable(
+                "605DAB50-E046-4300-ABB6-3DD810DD8B23",
+                "SbatLevel",
+                Some(b"sbat,1,2021030218\n"),
+            )?);
         }
 
         debug_print_log("RTMR0", &rtmr0_log);
