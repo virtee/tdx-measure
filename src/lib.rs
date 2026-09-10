@@ -4,17 +4,17 @@
  * Copyright (c) 2025 Intel Corporation
  * SPDX-License-Identifier: Apache-2.0
  */
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
-use anyhow::{anyhow, Result};
 
 pub use machine::Machine;
 
 use util::{measure_log, measure_sha384};
 
 mod acpi;
-mod kernel;
 mod image;
+mod kernel;
 mod machine;
 mod num;
 mod tdvf;
@@ -72,8 +72,12 @@ pub struct QemuShape {
     pub fw_cfg: Vec<String>,
 }
 
-fn default_cpu() -> String { "host".to_string() }
-fn default_accel() -> String { "kvm".to_string() }
+fn default_cpu() -> String {
+    "host".to_string()
+}
+fn default_accel() -> String {
+    "kvm".to_string()
+}
 
 /// Direct boot specific information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,7 +146,9 @@ impl ImageConfig {
 
     /// Get CPU count from boot config
     pub fn cpu_count(&self) -> Result<u8> {
-        let boot_config = self.boot_config.as_ref()
+        let boot_config = self
+            .boot_config
+            .as_ref()
             .ok_or_else(|| anyhow!("Boot config is required"))?;
 
         Ok(boot_config.cpus)
@@ -150,7 +156,9 @@ impl ImageConfig {
 
     /// Get memory size from boot config
     pub fn memory_size(&self) -> Result<u64> {
-        let boot_config = self.boot_config.as_ref()
+        let boot_config = self
+            .boot_config
+            .as_ref()
             .ok_or_else(|| anyhow!("Boot config is required"))?;
 
         parse_memory_size(&boot_config.memory)

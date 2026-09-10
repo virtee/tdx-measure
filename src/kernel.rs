@@ -3,7 +3,7 @@
  * Copyright (c) 2025 Tinfoil Inc
  * SPDX-License-Identifier: Apache-2.0
  */
-use crate::{measure_log, measure_sha384, util::debug_print_log, util::authenticode_sha384_hash};
+use crate::{measure_log, measure_sha384, util::authenticode_sha384_hash, util::debug_print_log};
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
 
@@ -99,7 +99,6 @@ pub(crate) fn measure_rtmr1_direct(
     mem_size: u64,
     acpi_data_size: u32,
 ) -> Result<Vec<u8>> {
-
     // Read kernel and initrd files
     let kernel_data = fs::read(kernel_path).context("Failed to read kernel file")?;
     let initrd_data = fs::read(initrd_path).context("Failed to read initrd file")?;
@@ -124,11 +123,7 @@ pub(crate) fn measure_rtmr1_direct(
 }
 
 /// Measures RTMR2 for direct boot from file paths.
-pub(crate) fn measure_rtmr2_direct(
-    initrd_path: &str,
-    kernel_cmdline: &str,
-) -> Result<Vec<u8>> {
-
+pub(crate) fn measure_rtmr2_direct(initrd_path: &str, kernel_cmdline: &str) -> Result<Vec<u8>> {
     // Reads our initrd file
     let initrd_data = fs::read(initrd_path).context("Failed to read initrd file")?;
 

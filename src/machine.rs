@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 use crate::tdvf::Tdvf;
-use crate::{kernel, image, TdxMeasurements};
+use crate::{image, kernel, TdxMeasurements};
 use anyhow::{Context, Result};
 use fs_err as fs;
 use log::debug;
@@ -51,20 +51,39 @@ impl Machine<'_> {
 
         // Direct boot
         if self.direct_boot {
-            let kernel_path = self.kernel.ok_or_else(|| anyhow::anyhow!("Kernel path required for direct boot"))?;
-            let initrd_path = self.initrd.ok_or_else(|| anyhow::anyhow!("Initrd path required for direct boot"))?;
+            let kernel_path = self
+                .kernel
+                .ok_or_else(|| anyhow::anyhow!("Kernel path required for direct boot"))?;
+            let initrd_path = self
+                .initrd
+                .ok_or_else(|| anyhow::anyhow!("Initrd path required for direct boot"))?;
 
-            rtmr1 = kernel::measure_rtmr1_direct(kernel_path, initrd_path, self.memory_size, 0x28000)?;
+            rtmr1 =
+                kernel::measure_rtmr1_direct(kernel_path, initrd_path, self.memory_size, 0x28000)?;
             rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline)?;
-
-        } else { // Indirect boot
-            let qcow2_path = self.qcow2.ok_or_else(|| anyhow::anyhow!("Qcow2 path required for indirect boot"))?;
-            let mok_list_path = self.mok_list.ok_or_else(|| anyhow::anyhow!("MOK list path required for indirect boot"))?;
-            let mok_list_trusted_path = self.mok_list_trusted.ok_or_else(|| anyhow::anyhow!("MOK list trusted path required for indirect boot"))?;
-            let mok_list_x_path = self.mok_list_x.ok_or_else(|| anyhow::anyhow!("MOK list X path required for indirect boot"))?;
+        } else {
+            // Indirect boot
+            let qcow2_path = self
+                .qcow2
+                .ok_or_else(|| anyhow::anyhow!("Qcow2 path required for indirect boot"))?;
+            let mok_list_path = self
+                .mok_list
+                .ok_or_else(|| anyhow::anyhow!("MOK list path required for indirect boot"))?;
+            let mok_list_trusted_path = self.mok_list_trusted.ok_or_else(|| {
+                anyhow::anyhow!("MOK list trusted path required for indirect boot")
+            })?;
+            let mok_list_x_path = self
+                .mok_list_x
+                .ok_or_else(|| anyhow::anyhow!("MOK list X path required for indirect boot"))?;
 
             rtmr1 = image::measure_rtmr1_from_qcow2(qcow2_path)?;
-            rtmr2 = image::measure_rtmr2_from_qcow2(qcow2_path, self.kernel_cmdline, mok_list_path, mok_list_trusted_path, mok_list_x_path)?;
+            rtmr2 = image::measure_rtmr2_from_qcow2(
+                qcow2_path,
+                self.kernel_cmdline,
+                mok_list_path,
+                mok_list_trusted_path,
+                mok_list_x_path,
+            )?;
         }
 
         Ok(TdxMeasurements {
@@ -95,21 +114,39 @@ impl Machine<'_> {
 
         // Direct boot
         if self.direct_boot {
-            let kernel_path = self.kernel.ok_or_else(|| anyhow::anyhow!("Kernel path required for direct boot"))?;
-            let initrd_path = self.initrd.ok_or_else(|| anyhow::anyhow!("Initrd path required for direct boot"))?;
+            let kernel_path = self
+                .kernel
+                .ok_or_else(|| anyhow::anyhow!("Kernel path required for direct boot"))?;
+            let initrd_path = self
+                .initrd
+                .ok_or_else(|| anyhow::anyhow!("Initrd path required for direct boot"))?;
 
             // WARN : Carefull, when measuring the runtime only, we only compute the measurement for memory size > 0xb0000000
             rtmr1 = kernel::measure_rtmr1_direct(kernel_path, initrd_path, 0xb0000000, 0x28000)?;
             rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline)?;
-
-        } else { // Indirect boot
-            let qcow2_path = self.qcow2.ok_or_else(|| anyhow::anyhow!("Qcow2 path required for indirect boot"))?;
-            let mok_list_path = self.mok_list.ok_or_else(|| anyhow::anyhow!("MOK list path required for indirect boot"))?;
-            let mok_list_trusted_path = self.mok_list_trusted.ok_or_else(|| anyhow::anyhow!("MOK list trusted path required for indirect boot"))?;
-            let mok_list_x_path = self.mok_list_x.ok_or_else(|| anyhow::anyhow!("MOK list X path required for indirect boot"))?;
+        } else {
+            // Indirect boot
+            let qcow2_path = self
+                .qcow2
+                .ok_or_else(|| anyhow::anyhow!("Qcow2 path required for indirect boot"))?;
+            let mok_list_path = self
+                .mok_list
+                .ok_or_else(|| anyhow::anyhow!("MOK list path required for indirect boot"))?;
+            let mok_list_trusted_path = self.mok_list_trusted.ok_or_else(|| {
+                anyhow::anyhow!("MOK list trusted path required for indirect boot")
+            })?;
+            let mok_list_x_path = self
+                .mok_list_x
+                .ok_or_else(|| anyhow::anyhow!("MOK list X path required for indirect boot"))?;
 
             rtmr1 = image::measure_rtmr1_from_qcow2(qcow2_path)?;
-            rtmr2 = image::measure_rtmr2_from_qcow2(qcow2_path, self.kernel_cmdline, mok_list_path, mok_list_trusted_path, mok_list_x_path)?;
+            rtmr2 = image::measure_rtmr2_from_qcow2(
+                qcow2_path,
+                self.kernel_cmdline,
+                mok_list_path,
+                mok_list_trusted_path,
+                mok_list_x_path,
+            )?;
         }
 
         Ok(TdxMeasurements {

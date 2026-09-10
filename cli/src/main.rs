@@ -5,11 +5,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use tdx_measure::{Machine, ImageConfig};
 use fs_err as fs;
 use std::path::{Path, PathBuf};
+use tdx_measure::{ImageConfig, Machine};
 
 mod transcript;
 use transcript::generate_transcript;
@@ -80,7 +80,11 @@ struct PathStorage {
 }
 
 impl PathResolver {
-    fn new(metadata_path: &Path, image_config: &ImageConfig, require_boot_config: bool) -> Result<Self> {
+    fn new(
+        metadata_path: &Path,
+        image_config: &ImageConfig,
+        require_boot_config: bool,
+    ) -> Result<Self> {
         let parent_dir = metadata_path.parent().unwrap_or(".".as_ref());
 
         // Handle optional boot_config
@@ -90,23 +94,54 @@ impl PathResolver {
                 memory_size: image_config.memory_size()?,
                 firmware: parent_dir.join(&boot_config.bios).display().to_string(),
                 cmdline: image_config.cmdline().to_string(),
-                acpi_tables: parent_dir.join(&boot_config.acpi_tables).display().to_string(),
-                rsdp: boot_config.rsdp.as_ref().map(|p| parent_dir.join(p).display().to_string()),
-                table_loader: boot_config.table_loader.as_ref().map(|p| parent_dir.join(p).display().to_string()),
-                boot_order: boot_config.boot_order.as_ref().map(|p| parent_dir.join(p).display().to_string()),
-                path_boot_xxxx: boot_config.path_boot_xxxx.as_ref().map(|p| parent_dir.join(p).display().to_string()),
-                kernel: image_config.direct_boot().map(|d| parent_dir.join(&d.kernel).display().to_string()),
-                initrd: image_config.direct_boot().map(|d| parent_dir.join(&d.initrd).display().to_string()),
-                qcow2: image_config.indirect_boot().map(|i| parent_dir.join(&i.qcow2).display().to_string()),
-                mok_list: image_config.indirect_boot().map(|i| parent_dir.join(&i.mok_list).display().to_string()),
-                mok_list_trusted: image_config.indirect_boot().map(|i| parent_dir.join(&i.mok_list_trusted).display().to_string()),
-                mok_list_x: image_config.indirect_boot().map(|i| parent_dir.join(&i.mok_list_x).display().to_string()),
-                sbat_level: image_config.indirect_boot().map(|i| parent_dir.join(&i.sbat_level).display().to_string()),
+                acpi_tables: parent_dir
+                    .join(&boot_config.acpi_tables)
+                    .display()
+                    .to_string(),
+                rsdp: boot_config
+                    .rsdp
+                    .as_ref()
+                    .map(|p| parent_dir.join(p).display().to_string()),
+                table_loader: boot_config
+                    .table_loader
+                    .as_ref()
+                    .map(|p| parent_dir.join(p).display().to_string()),
+                boot_order: boot_config
+                    .boot_order
+                    .as_ref()
+                    .map(|p| parent_dir.join(p).display().to_string()),
+                path_boot_xxxx: boot_config
+                    .path_boot_xxxx
+                    .as_ref()
+                    .map(|p| parent_dir.join(p).display().to_string()),
+                kernel: image_config
+                    .direct_boot()
+                    .map(|d| parent_dir.join(&d.kernel).display().to_string()),
+                initrd: image_config
+                    .direct_boot()
+                    .map(|d| parent_dir.join(&d.initrd).display().to_string()),
+                qcow2: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.qcow2).display().to_string()),
+                mok_list: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.mok_list).display().to_string()),
+                mok_list_trusted: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.mok_list_trusted).display().to_string()),
+                mok_list_x: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.mok_list_x).display().to_string()),
+                sbat_level: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.sbat_level).display().to_string()),
             }
         } else {
             // When boot_config is None (runtime-only mode), provide empty strings for platform fields
             if require_boot_config {
-                return Err(anyhow!("Boot info is required but not provided in the configuration"));
+                return Err(anyhow!(
+                    "Boot info is required but not provided in the configuration"
+                ));
             }
             PathStorage {
                 cpu_count: 0,
@@ -118,13 +153,27 @@ impl PathResolver {
                 table_loader: None,
                 boot_order: None,
                 path_boot_xxxx: None,
-                kernel: image_config.direct_boot().map(|d| parent_dir.join(&d.kernel).display().to_string()),
-                initrd: image_config.direct_boot().map(|d| parent_dir.join(&d.initrd).display().to_string()),
-                qcow2: image_config.indirect_boot().map(|i| parent_dir.join(&i.qcow2).display().to_string()),
-                mok_list: image_config.indirect_boot().map(|i| parent_dir.join(&i.mok_list).display().to_string()),
-                mok_list_trusted: image_config.indirect_boot().map(|i| parent_dir.join(&i.mok_list_trusted).display().to_string()),
-                mok_list_x: image_config.indirect_boot().map(|i| parent_dir.join(&i.mok_list_x).display().to_string()),
-                sbat_level: image_config.indirect_boot().map(|i| parent_dir.join(&i.sbat_level).display().to_string()),
+                kernel: image_config
+                    .direct_boot()
+                    .map(|d| parent_dir.join(&d.kernel).display().to_string()),
+                initrd: image_config
+                    .direct_boot()
+                    .map(|d| parent_dir.join(&d.initrd).display().to_string()),
+                qcow2: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.qcow2).display().to_string()),
+                mok_list: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.mok_list).display().to_string()),
+                mok_list_trusted: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.mok_list_trusted).display().to_string()),
+                mok_list_x: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.mok_list_x).display().to_string()),
+                sbat_level: image_config
+                    .indirect_boot()
+                    .map(|i| parent_dir.join(&i.sbat_level).display().to_string()),
             }
         };
 
@@ -167,7 +216,8 @@ impl PathResolver {
 
 fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> {
     // Validate the configuration
-    image_config.validate()
+    image_config
+        .validate()
         .map_err(|e| anyhow!("Invalid image configuration: {}", e))?;
 
     // Determine boot mode: CLI flag overrides JSON configuration, defaults to direct boot
@@ -180,9 +230,21 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
 
     // Validate boot mode configuration (skip validation for platform-only mode)
     if !config.platform_only {
-        match (direct_boot, image_config.direct_boot(), image_config.indirect_boot()) {
-            (true, None, _) => return Err(anyhow!("Direct boot mode specified but no direct boot configuration found in JSON")),
-            (false, _, None) => return Err(anyhow!("Indirect boot mode specified but no indirect boot configuration found in JSON")),
+        match (
+            direct_boot,
+            image_config.direct_boot(),
+            image_config.indirect_boot(),
+        ) {
+            (true, None, _) => {
+                return Err(anyhow!(
+                    "Direct boot mode specified but no direct boot configuration found in JSON"
+                ))
+            }
+            (false, _, None) => {
+                return Err(anyhow!(
+                    "Indirect boot mode specified but no indirect boot configuration found in JSON"
+                ))
+            }
             _ => {}
         }
     }
@@ -230,19 +292,33 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
 
     // Measure
     let measurements = if config.platform_only {
-        machine.measure_platform().context("Failed to measure platform")?
+        machine
+            .measure_platform()
+            .context("Failed to measure platform")?
     } else if config.runtime_only {
         if create_acpi_table {
-            eprintln!("--create-acpi-tables is not required with --runtime-only and will be ignored");
+            eprintln!(
+                "--create-acpi-tables is not required with --runtime-only and will be ignored"
+            );
         }
-        machine.measure_runtime().context("Failed to measure runtime")?
+        machine
+            .measure_runtime()
+            .context("Failed to measure runtime")?
     } else {
-        machine.measure().context("Failed to measure machine configuration")?
+        machine
+            .measure()
+            .context("Failed to measure machine configuration")?
     };
 
     // Generate transcript (if requested).
     if let Some(ref transcript_file) = config.transcript {
-        generate_transcript(transcript_file, &path_resolver, direct_boot, config.platform_only, config.runtime_only)?;
+        generate_transcript(
+            transcript_file,
+            &path_resolver,
+            direct_boot,
+            config.platform_only,
+            config.runtime_only,
+        )?;
     }
 
     // Output results
@@ -265,8 +341,7 @@ fn output_measurements(config: &Cli, measurements: &tdx_measure::TdxMeasurements
     }
 
     if let Some(ref json_file) = config.json_file {
-        fs::write(json_file, json_output)
-            .context("Failed to write measurements to file")?;
+        fs::write(json_file, json_output).context("Failed to write measurements to file")?;
     }
 
     Ok(())
@@ -276,10 +351,9 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    let metadata = fs::read_to_string(&cli.metadata)
-        .context("Failed to read image metadata")?;
-    let image_config: ImageConfig = serde_json::from_str(&metadata)
-        .context("Failed to parse image metadata")?;
+    let metadata = fs::read_to_string(&cli.metadata).context("Failed to read image metadata")?;
+    let image_config: ImageConfig =
+        serde_json::from_str(&metadata).context("Failed to parse image metadata")?;
 
     process_measurements(&cli, &image_config)?;
 

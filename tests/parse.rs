@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use tdx_measure::{ImageConfig, Machine};
 
 fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
 }
 
 fn ovmf_path() -> PathBuf {
@@ -48,8 +50,7 @@ struct Expected {
 /// absolute repo path into the checked-in fixture), and builds a Machine the
 /// caller can `measure_platform()` on.
 fn machine_for(fixture: &Path) -> (ImageConfig, PathBuf) {
-    let raw = std::fs::read_to_string(fixture.join("metadata.json"))
-        .expect("read metadata.json");
+    let raw = std::fs::read_to_string(fixture.join("metadata.json")).expect("read metadata.json");
     let cfg: ImageConfig = serde_json::from_str(&raw).expect("parse metadata.json");
     (cfg, fixture.join("metadata.json"))
 }
@@ -67,8 +68,7 @@ fn measure_platform_matches_expected_json_for_every_fixture() {
     for fixture in discover_fixtures() {
         let name = fixture.file_name().unwrap().to_string_lossy().into_owned();
         let expected: Expected = serde_json::from_reader(
-            std::fs::File::open(fixture.join("expected.json"))
-                .expect("read expected.json"),
+            std::fs::File::open(fixture.join("expected.json")).expect("read expected.json"),
         )
         .expect("parse expected.json");
 

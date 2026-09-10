@@ -3,16 +3,21 @@
  * Copyright (c) 2025 Intel Corporation
  * SPDX-License-Identifier: Apache-2.0
  */
-use std::io::Write;
-use std::process::Command;
-use anyhow::{Context, Result, anyhow};
-use fs_err as fs;
-use std::path::Path;
 use crate::{PathResolver, PathStorage};
+use anyhow::{anyhow, Context, Result};
+use fs_err as fs;
+use std::io::Write;
+use std::path::Path;
+use std::process::Command;
 
 /// Generate a human-readable transcript of metadata files
-pub fn generate_transcript(output_file: &Path, path_resolver: &PathResolver, direct_boot: bool, platform_only: bool, runtime_only: bool) -> Result<()> {
-
+pub fn generate_transcript(
+    output_file: &Path,
+    path_resolver: &PathResolver,
+    direct_boot: bool,
+    platform_only: bool,
+    runtime_only: bool,
+) -> Result<()> {
     let mut output = Vec::new();
 
     writeln!(output, "=== TDX Metadata Transcript ===").unwrap();
@@ -76,11 +81,19 @@ fn split_acpi_tables(data: &[u8]) -> Result<Vec<AcpiTableInfo>> {
         }
 
         // Read signature (4 bytes)
-        let signature_bytes = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
+        let signature_bytes = [
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ];
 
         // Read length (4 bytes, little-endian)
         let length = u32::from_le_bytes([
-            data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
         ]);
 
         // Validate length
@@ -90,7 +103,10 @@ fn split_acpi_tables(data: &[u8]) -> Result<Vec<AcpiTableInfo>> {
         }
 
         if offset + length as usize > data.len() {
-            eprintln!("Warning: Table length {} exceeds remaining data at offset {}, skipping", length, offset);
+            eprintln!(
+                "Warning: Table length {} exceeds remaining data at offset {}, skipping",
+                length, offset
+            );
             offset += 1;
             continue;
         }
@@ -99,7 +115,10 @@ fn split_acpi_tables(data: &[u8]) -> Result<Vec<AcpiTableInfo>> {
         let signature = match std::str::from_utf8(&signature_bytes) {
             Ok(s) if is_valid_acpi_signature(&signature_bytes) => s.to_string(),
             _ => {
-                eprintln!("Warning: Invalid signature at offset {}: {:02x?}, searching for next table", offset, signature_bytes);
+                eprintln!(
+                    "Warning: Invalid signature at offset {}: {:02x?}, searching for next table",
+                    offset, signature_bytes
+                );
                 offset += 1;
                 continue;
             }
@@ -114,7 +133,10 @@ fn split_acpi_tables(data: &[u8]) -> Result<Vec<AcpiTableInfo>> {
             data: table_data,
         });
 
-        eprintln!("Found ACPI table: {} ({} bytes) at offset {}", signature, length, offset);
+        eprintln!(
+            "Found ACPI table: {} ({} bytes) at offset {}",
+            signature, length, offset
+        );
 
         // Move to the next table (no alignment padding, just exact length)
         offset += length as usize;
@@ -132,13 +154,15 @@ fn split_acpi_tables(data: &[u8]) -> Result<Vec<AcpiTableInfo>> {
 fn write_acpi_tables_with_iasl(output: &mut Vec<u8>, acpi_tables_path: &str) -> Result<()> {
     writeln!(output, "=== ACPI Tables ===").unwrap();
     writeln!(output, "Source: QEMU fw_cfg concatenated ACPI tables dump").unwrap();
-    writeln!(output, "Disassembled using Intel ACPI Source Language Compiler (iasl)").unwrap();
+    writeln!(
+        output,
+        "Disassembled using Intel ACPI Source Language Compiler (iasl)"
+    )
+    .unwrap();
     writeln!(output).unwrap();
 
     // Check if iasl is available
-    let iasl_check = Command::new("iasl")
-        .arg("-h")
-        .output();
+    let iasl_check = Command::new("iasl").arg("-h").output();
 
     if iasl_check.is_err() {
         writeln!(output, "WARNING: iasl tool not found. Install acpica-tools package for detailed ACPI analysis.").unwrap();
@@ -172,7 +196,14 @@ fn write_acpi_tables_with_iasl(output: &mut Vec<u8>, acpi_tables_path: &str) -> 
     }
 
     for (signature, count) in &signature_counts {
-        writeln!(output, "  {}: {} table{}", signature, count, if *count > 1 { "s" } else { "" }).unwrap();
+        writeln!(
+            output,
+            "  {}: {} table{}",
+            signature,
+            count,
+            if *count > 1 { "s" } else { "" }
+        )
+        .unwrap();
     }
     writeln!(output).unwrap();
 
@@ -183,7 +214,14 @@ fn write_acpi_tables_with_iasl(output: &mut Vec<u8>, acpi_tables_path: &str) -> 
 
     // Process each table with iasl
     for (i, table) in tables.iter().enumerate() {
-        writeln!(output, "=== Table {}: {} ({} bytes) ===", i + 1, table.signature, table.length).unwrap();
+        writeln!(
+            output,
+            "=== Table {}: {} ({} bytes) ===",
+            i + 1,
+            table.signature,
+            table.length
+        )
+        .unwrap();
 
         // Generate unique filename for duplicate signatures
         let table_filename = if signature_counts[&table.signature] > 1 {
@@ -198,7 +236,7 @@ fn write_acpi_tables_with_iasl(output: &mut Vec<u8>, acpi_tables_path: &str) -> 
 
         // Run iasl on this specific table
         let iasl_output = Command::new("iasl")
-            .arg("-d")  // Disassemble
+            .arg("-d") // Disassemble
             .arg(&temp_table_file)
             .current_dir(&temp_dir)
             .output()
@@ -230,11 +268,21 @@ fn write_acpi_tables_with_iasl(output: &mut Vec<u8>, acpi_tables_path: &str) -> 
                     writeln!(output, "---").unwrap();
                 }
                 Err(e) => {
-                    writeln!(output, "Error reading disassembled {} table: {}", table.signature, e).unwrap();
+                    writeln!(
+                        output,
+                        "Error reading disassembled {} table: {}",
+                        table.signature, e
+                    )
+                    .unwrap();
                 }
             }
         } else {
-            writeln!(output, "No .dsl file generated for {} table. Raw hex dump:", table.signature).unwrap();
+            writeln!(
+                output,
+                "No .dsl file generated for {} table. Raw hex dump:",
+                table.signature
+            )
+            .unwrap();
             write_raw_table_hex_dump(output, &table.data, &table.signature)?;
         }
 
@@ -243,7 +291,11 @@ fn write_acpi_tables_with_iasl(output: &mut Vec<u8>, acpi_tables_path: &str) -> 
 
     // Clean up temporary directory
     if let Err(e) = fs::remove_dir_all(&temp_dir) {
-        eprintln!("Warning: Failed to clean up temp directory {}: {}", temp_dir.display(), e);
+        eprintln!(
+            "Warning: Failed to clean up temp directory {}: {}",
+            temp_dir.display(),
+            e
+        );
     }
 
     Ok(())
@@ -251,7 +303,13 @@ fn write_acpi_tables_with_iasl(output: &mut Vec<u8>, acpi_tables_path: &str) -> 
 
 /// Write raw table data as hex dump
 fn write_raw_table_hex_dump(output: &mut Vec<u8>, data: &[u8], table_name: &str) -> Result<()> {
-    writeln!(output, "{} table raw data ({} bytes):", table_name, data.len()).unwrap();
+    writeln!(
+        output,
+        "{} table raw data ({} bytes):",
+        table_name,
+        data.len()
+    )
+    .unwrap();
 
     let display_bytes = std::cmp::min(data.len(), 256);
 
@@ -297,7 +355,6 @@ fn write_raw_table_hex_dump(output: &mut Vec<u8>, data: &[u8], table_name: &str)
 
 // Print UEFI boot variables
 // Specification can be found at https://uefi.org/specs/UEFI/2.10/03_Boot_Manager.html
-
 
 /// EFI_LOAD_OPTION structure representing a UEFI boot option
 #[derive(Debug)]
@@ -391,8 +448,12 @@ fn format_device_path(path: &DevicePath) -> String {
         DEVICE_PATH_TYPE_MEDIA => format_media_device_path(path),
         DEVICE_PATH_TYPE_BIOS_BOOT => format_bios_boot_device_path(path),
         DEVICE_PATH_TYPE_END => "End".to_string(),
-        _ => format!("Unknown(Type={}, SubType={}, {} bytes)",
-                    path.path_type, path.sub_type, path.data.len()),
+        _ => format!(
+            "Unknown(Type={}, SubType={}, {} bytes)",
+            path.path_type,
+            path.sub_type,
+            path.data.len()
+        ),
     }
 }
 
@@ -408,7 +469,11 @@ fn format_hardware_device_path(path: &DevicePath) -> String {
                 "PCI(Invalid)".to_string()
             }
         }
-        _ => format!("Hardware(SubType={}, {} bytes)", path.sub_type, path.data.len()),
+        _ => format!(
+            "Hardware(SubType={}, {} bytes)",
+            path.sub_type,
+            path.data.len()
+        ),
     }
 }
 
@@ -417,8 +482,10 @@ fn format_acpi_device_path(path: &DevicePath) -> String {
     match path.sub_type {
         DEVICE_PATH_SUBTYPE_ACPI => {
             if path.data.len() >= 8 {
-                let hid = u32::from_le_bytes([path.data[0], path.data[1], path.data[2], path.data[3]]);
-                let uid = u32::from_le_bytes([path.data[4], path.data[5], path.data[6], path.data[7]]);
+                let hid =
+                    u32::from_le_bytes([path.data[0], path.data[1], path.data[2], path.data[3]]);
+                let uid =
+                    u32::from_le_bytes([path.data[4], path.data[5], path.data[6], path.data[7]]);
                 format!("ACPI(HID=0x{:08X},UID=0x{:08X})", hid, uid)
             } else {
                 "ACPI(Invalid)".to_string()
@@ -430,7 +497,11 @@ fn format_acpi_device_path(path: &DevicePath) -> String {
 
 /// Format messaging device path
 fn format_messaging_device_path(path: &DevicePath) -> String {
-    format!("Messaging(SubType={}, {} bytes)", path.sub_type, path.data.len())
+    format!(
+        "Messaging(SubType={}, {} bytes)",
+        path.sub_type,
+        path.data.len()
+    )
 }
 
 /// Format media device path
@@ -438,14 +509,27 @@ fn format_media_device_path(path: &DevicePath) -> String {
     match path.sub_type {
         DEVICE_PATH_SUBTYPE_HARD_DRIVE => {
             if path.data.len() >= 42 {
-                let partition_number = u32::from_le_bytes([path.data[0], path.data[1], path.data[2], path.data[3]]);
+                let partition_number =
+                    u32::from_le_bytes([path.data[0], path.data[1], path.data[2], path.data[3]]);
                 let partition_start = u64::from_le_bytes([
-                    path.data[4], path.data[5], path.data[6], path.data[7],
-                    path.data[8], path.data[9], path.data[10], path.data[11]
+                    path.data[4],
+                    path.data[5],
+                    path.data[6],
+                    path.data[7],
+                    path.data[8],
+                    path.data[9],
+                    path.data[10],
+                    path.data[11],
                 ]);
                 let partition_size = u64::from_le_bytes([
-                    path.data[12], path.data[13], path.data[14], path.data[15],
-                    path.data[16], path.data[17], path.data[18], path.data[19]
+                    path.data[12],
+                    path.data[13],
+                    path.data[14],
+                    path.data[15],
+                    path.data[16],
+                    path.data[17],
+                    path.data[18],
+                    path.data[19],
                 ]);
                 let signature_type = path.data[41];
                 let signature_type_str = match signature_type {
@@ -454,8 +538,10 @@ fn format_media_device_path(path: &DevicePath) -> String {
                     0x02 => "GPT",
                     _ => "Unknown",
                 };
-                format!("HD(Part={},Sig={},Start=0x{:X},Size=0x{:X})",
-                       partition_number, signature_type_str, partition_start, partition_size)
+                format!(
+                    "HD(Part={},Sig={},Start=0x{:X},Size=0x{:X})",
+                    partition_number, signature_type_str, partition_start, partition_size
+                )
             } else {
                 "HD(Invalid)".to_string()
             }
@@ -463,7 +549,9 @@ fn format_media_device_path(path: &DevicePath) -> String {
         DEVICE_PATH_SUBTYPE_FILE_PATH => {
             if !path.data.is_empty() {
                 // File path is UTF-16 encoded
-                let utf16_chars: Vec<u16> = path.data.chunks(2)
+                let utf16_chars: Vec<u16> = path
+                    .data
+                    .chunks(2)
                     .filter_map(|chunk| {
                         if chunk.len() == 2 {
                             Some(u16::from_le_bytes([chunk[0], chunk[1]]))
@@ -482,7 +570,11 @@ fn format_media_device_path(path: &DevicePath) -> String {
                 "File(Empty)".to_string()
             }
         }
-        _ => format!("Media(SubType={}, {} bytes)", path.sub_type, path.data.len()),
+        _ => format!(
+            "Media(SubType={}, {} bytes)",
+            path.sub_type,
+            path.data.len()
+        ),
     }
 }
 
@@ -498,7 +590,8 @@ fn format_device_path_list(data: &[u8]) -> String {
             if paths.is_empty() {
                 "[Empty]".to_string()
             } else {
-                paths.iter()
+                paths
+                    .iter()
                     .map(format_device_path)
                     .collect::<Vec<_>>()
                     .join("/")
@@ -511,7 +604,10 @@ fn format_device_path_list(data: &[u8]) -> String {
 /// Parse BootOrder variable (array of UINT16 values in little-endian)
 fn parse_boot_order(data: &[u8]) -> Result<Vec<u16>> {
     if data.len() % 2 != 0 {
-        return Err(anyhow!("BootOrder data length must be even (got {} bytes)", data.len()));
+        return Err(anyhow!(
+            "BootOrder data length must be even (got {} bytes)",
+            data.len()
+        ));
     }
 
     let mut boot_order = Vec::new();
@@ -526,7 +622,10 @@ fn parse_boot_order(data: &[u8]) -> Result<Vec<u16>> {
 /// Parse Boot#### variable (EFI_LOAD_OPTION structure)
 fn parse_boot_option(data: &[u8]) -> Result<EfiLoadOption> {
     if data.len() < 6 {
-        return Err(anyhow!("Boot option data too short (need at least 6 bytes, got {})", data.len()));
+        return Err(anyhow!(
+            "Boot option data too short (need at least 6 bytes, got {})",
+            data.len()
+        ));
     }
 
     // Parse fixed header (6 bytes)
@@ -559,8 +658,11 @@ fn parse_boot_option(data: &[u8]) -> Result<EfiLoadOption> {
     let file_path_list = if file_path_end <= data.len() {
         data[offset..file_path_end].to_vec()
     } else {
-        return Err(anyhow!("File path list extends beyond data (need {} bytes, have {})",
-                          file_path_end, data.len()));
+        return Err(anyhow!(
+            "File path list extends beyond data (need {} bytes, have {})",
+            file_path_end,
+            data.len()
+        ));
     };
 
     offset = file_path_end;
@@ -610,14 +712,30 @@ fn format_load_option_attributes(attributes: u32) -> String {
 }
 
 /// Write boot variables with pretty printing and hex dumps
-fn write_boot_variables(output: &mut Vec<u8>, paths: &PathStorage, direct_boot: bool) -> Result<()> {
+fn write_boot_variables(
+    output: &mut Vec<u8>,
+    paths: &PathStorage,
+    direct_boot: bool,
+) -> Result<()> {
     writeln!(output, "=== Boot Variables ===").unwrap();
-    writeln!(output, "These are UEFI boot variables that control the boot process.").unwrap();
-    writeln!(output, "Reference: UEFI Specification 2.10+ Chapter 3: Boot Manager").unwrap();
+    writeln!(
+        output,
+        "These are UEFI boot variables that control the boot process."
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "Reference: UEFI Specification 2.10+ Chapter 3: Boot Manager"
+    )
+    .unwrap();
     writeln!(output).unwrap();
 
     // Parse and display BootOrder
-    let boot_entries = write_boot_order_analysis(output, &paths.boot_order.as_deref().unwrap_or(""), direct_boot)?;
+    let boot_entries = write_boot_order_analysis(
+        output,
+        &paths.boot_order.as_deref().unwrap_or(""),
+        direct_boot,
+    )?;
 
     // Parse and display Boot#### variables
 
@@ -629,7 +747,11 @@ fn write_boot_variables(output: &mut Vec<u8>, paths: &PathStorage, direct_boot: 
     } else {
         for boot_entry in boot_entries {
             let name = format!("Boot{:04X}", boot_entry);
-            let path = format!("{}/{}.bin", paths.path_boot_xxxx.as_deref().unwrap_or(""), name);
+            let path = format!(
+                "{}/{}.bin",
+                paths.path_boot_xxxx.as_deref().unwrap_or(""),
+                name
+            );
             let data = fs::read(&path)
                 .with_context(|| format!("Failed to read {} from {}", name, path))?;
             write_boot_option_analysis(output, &name, &data)?;
@@ -640,7 +762,11 @@ fn write_boot_variables(output: &mut Vec<u8>, paths: &PathStorage, direct_boot: 
 }
 
 /// Write BootOrder analysis with pretty printing
-fn write_boot_order_analysis(output: &mut Vec<u8>, boot_order_path: &str, direct_boot: bool) -> Result<Vec<u16>> {
+fn write_boot_order_analysis(
+    output: &mut Vec<u8>,
+    boot_order_path: &str,
+    direct_boot: bool,
+) -> Result<Vec<u16>> {
     writeln!(output, "--- BootOrder Analysis ---").unwrap();
 
     let data = if direct_boot {
@@ -657,8 +783,16 @@ fn write_boot_order_analysis(output: &mut Vec<u8>, boot_order_path: &str, direct
             for (i, boot_num) in boot_order.iter().enumerate() {
                 writeln!(output, "  {}: Boot{:04X}", i + 1, boot_num).unwrap();
             }
-            writeln!(output, "Boot preference order: {}",
-                    boot_order.iter().map(|n| format!("Boot{:04X}", n)).collect::<Vec<_>>().join(" -> ")).unwrap();
+            writeln!(
+                output,
+                "Boot preference order: {}",
+                boot_order
+                    .iter()
+                    .map(|n| format!("Boot{:04X}", n))
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            )
+            .unwrap();
             boot_order
         }
         Err(e) => {
@@ -693,10 +827,25 @@ fn write_boot_option_analysis(output: &mut Vec<u8>, name: &str, data: &[u8]) -> 
     match parse_boot_option(&data) {
         Ok(boot_option) => {
             writeln!(output, "EFI_LOAD_OPTION structure:").unwrap();
-            writeln!(output, "  Attributes: {}", format_load_option_attributes(boot_option.attributes)).unwrap();
-            writeln!(output, "  FilePathListLength: {} bytes", boot_option.file_path_list_length).unwrap();
+            writeln!(
+                output,
+                "  Attributes: {}",
+                format_load_option_attributes(boot_option.attributes)
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  FilePathListLength: {} bytes",
+                boot_option.file_path_list_length
+            )
+            .unwrap();
             writeln!(output, "  Description: \"{}\"", boot_option.description).unwrap();
-            writeln!(output, "  FilePathList: {} bytes", boot_option.file_path_list.len()).unwrap();
+            writeln!(
+                output,
+                "  FilePathList: {} bytes",
+                boot_option.file_path_list.len()
+            )
+            .unwrap();
 
             if !boot_option.file_path_list.is_empty() {
                 let device_path_str = format_device_path_list(&boot_option.file_path_list);
@@ -704,17 +853,35 @@ fn write_boot_option_analysis(output: &mut Vec<u8>, name: &str, data: &[u8]) -> 
             }
 
             if !boot_option.optional_data.is_empty() {
-                writeln!(output, "  OptionalData: {} bytes", boot_option.optional_data.len()).unwrap();
-                writeln!(output, "    OptionalData hex: {}",
-                        boot_option.optional_data.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")).unwrap();
+                writeln!(
+                    output,
+                    "  OptionalData: {} bytes",
+                    boot_option.optional_data.len()
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "    OptionalData hex: {}",
+                    boot_option
+                        .optional_data
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+                .unwrap();
             }
 
             // Boot status summary
             let active = boot_option.attributes & LOAD_OPTION_ACTIVE != 0;
             let hidden = boot_option.attributes & LOAD_OPTION_HIDDEN != 0;
-            writeln!(output, "  Status: {} {}",
-                    if active { "ACTIVE" } else { "INACTIVE" },
-                    if hidden { "(HIDDEN)" } else { "(VISIBLE)" }).unwrap();
+            writeln!(
+                output,
+                "  Status: {} {}",
+                if active { "ACTIVE" } else { "INACTIVE" },
+                if hidden { "(HIDDEN)" } else { "(VISIBLE)" }
+            )
+            .unwrap();
         }
         Err(e) => {
             writeln!(output, "Failed to parse {} as EFI_LOAD_OPTION: {}", name, e).unwrap();
@@ -754,7 +921,11 @@ fn write_mok_variables(output: &mut Vec<u8>, paths: &PathStorage) -> Result<()> 
 /// Write SBAT level for indirect boot
 fn write_sbat_level(output: &mut Vec<u8>, paths: &PathStorage) -> Result<()> {
     writeln!(output, "=== SBAT Level ===").unwrap();
-    writeln!(output, "Secure Boot Advanced Targeting (SBAT) level information.").unwrap();
+    writeln!(
+        output,
+        "Secure Boot Advanced Targeting (SBAT) level information."
+    )
+    .unwrap();
     writeln!(output).unwrap();
 
     if let Some(ref sbat_level) = paths.sbat_level {
@@ -776,8 +947,8 @@ fn write_sbat_level(output: &mut Vec<u8>, paths: &PathStorage) -> Result<()> {
 
 /// Write a file as hex dump with ASCII representation
 fn write_hex_dump(output: &mut Vec<u8>, file_path: &str, name: &str) -> Result<()> {
-    let data = fs::read(file_path)
-        .with_context(|| format!("Failed to read file: {}", file_path))?;
+    let data =
+        fs::read(file_path).with_context(|| format!("Failed to read file: {}", file_path))?;
 
     write_raw_hex_dump(output, &data, name)?;
 

@@ -3,11 +3,11 @@
  * Copyright (c) 2025 Tinfoil Inc
  * SPDX-License-Identifier: Apache-2.0
  */
-use log::debug;
-use sha2::{Digest, Sha384};
-use crate::{num::read_le};
+use crate::num::read_le;
 use anyhow::{bail, Result};
+use log::debug;
 use object::pe;
+use sha2::{Digest, Sha384};
 use std::fs;
 
 /// Computes a SHA384 hash of the given data.

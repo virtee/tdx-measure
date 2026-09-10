@@ -34,6 +34,10 @@ jobs:
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
     - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6  # v1.16.1
+      with:
+        # The toolchain is installed with the minimal profile, so rustfmt has to be requested explicitly.
+        # Without this the fmt check below depends on the hosted image happening to ship it.
+        components: rustfmt
     - name: Cache cargo deps
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
       with:
@@ -45,6 +49,8 @@ jobs:
         key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
           cargo-${{ runner.os }}-
+    - name: Check Rust formatting
+      run: cargo fmt --all -- --check
     - name: Check Cargo manifest sorting
       # cargo-sort is not shipped with the toolchain, so it is installed here.
       # Pinned so a new upstream release cannot turn a green PR red on its own.

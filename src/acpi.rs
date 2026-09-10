@@ -35,12 +35,12 @@ impl Machine<'_> {
             generate_acpi_tables(self.metadata_path, self.distribution, self.qemu_version)?;
         }
 
-        let tables  = read_file_data(self.acpi_tables)?;
+        let tables = read_file_data(self.acpi_tables)?;
 
         let rsdp: Vec<u8> = if !self.rsdp.is_empty() {
             read_file_data(self.rsdp)?
         } else {
-            let (rsdt_offset, _rsdt_csum, _rsdt_len) = find_acpi_table(&tables , "RSDT")?;
+            let (rsdt_offset, _rsdt_csum, _rsdt_len) = find_acpi_table(&tables, "RSDT")?;
 
             // Generate RSDP
             let mut rsdp = Vec::with_capacity(20);
@@ -115,8 +115,16 @@ fn derive_table_loader(tables: &[u8]) -> Result<Vec<u8>> {
     let (rsdt_offset, rsdt_csum, rsdt_len) = find("RSDT")?;
 
     let mut loader = TableLoader::new();
-    loader.append(LoaderCmd::Allocate { file: RSDP_FILE, alignment: 16, zone: 2 });
-    loader.append(LoaderCmd::Allocate { file: TABLES_FILE, alignment: 64, zone: 1 });
+    loader.append(LoaderCmd::Allocate {
+        file: RSDP_FILE,
+        alignment: 16,
+        zone: 2,
+    });
+    loader.append(LoaderCmd::Allocate {
+        file: TABLES_FILE,
+        alignment: 64,
+        zone: 1,
+    });
     loader.append(LoaderCmd::AddChecksum {
         file: TABLES_FILE,
         result_offset: dsdt_csum,
@@ -331,21 +339,22 @@ struct QemuPkg<'a> {
 
 fn qemu_pkg_for<'a>(distribution: &str, version_override: Option<&'a str>) -> Result<QemuPkg<'a>> {
     // Pinned defaults for reproducibility; override via `--qemu-version`.
-    let (source, default_version, image_digest): (&'static str, &'static str, &'static str) = match distribution {
-        "ubuntu:25.04" => (
-            "ppa",
-            "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2",
-            "sha256:27771fb7b40a58237c98e8d3e6b9ecdd9289cec69a857fccfb85ff36294dac20",
-        ),
-        "ubuntu:26.04" => (
-            "main",
-            "1:10.2.1+ds-1ubuntu4",
-            "sha256:f3d28607ddd78734bb7f71f117f3c6706c666b8b76cbff7c9ff6e5718d46ff64",
-        ),
-        other => bail!(
-            "Unsupported distribution: {other}. Supported: ubuntu:25.04, ubuntu:26.04"
-        ),
-    };
+    let (source, default_version, image_digest): (&'static str, &'static str, &'static str) =
+        match distribution {
+            "ubuntu:25.04" => (
+                "ppa",
+                "1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2",
+                "sha256:27771fb7b40a58237c98e8d3e6b9ecdd9289cec69a857fccfb85ff36294dac20",
+            ),
+            "ubuntu:26.04" => (
+                "main",
+                "1:10.2.1+ds-1ubuntu4",
+                "sha256:f3d28607ddd78734bb7f71f117f3c6706c666b8b76cbff7c9ff6e5718d46ff64",
+            ),
+            other => {
+                bail!("Unsupported distribution: {other}. Supported: ubuntu:25.04, ubuntu:26.04")
+            }
+        };
     Ok(QemuPkg {
         source,
         version: version_override.unwrap_or(default_version),
@@ -368,34 +377,48 @@ fn build_qemu_args(qemu: Option<&QemuShape>, cpus: u8, memory: &str) -> Vec<OsSt
 
     match qemu {
         Some(q) => {
-            push(&mut args, "-accel",     &q.accel);
-            push(&mut args, "-m",         memory);
-            push(&mut args, "-smp",       &format!("{cpus},maxcpus={cpus}"));
-            push(&mut args, "-cpu",       &q.cpu);
+            push(&mut args, "-accel", &q.accel);
+            push(&mut args, "-m", memory);
+            push(&mut args, "-smp", &format!("{cpus},maxcpus={cpus}"));
+            push(&mut args, "-cpu", &q.cpu);
             args.push("-no-reboot".into());
             args.push("-nodefaults".into());
-            push(&mut args, "-vga",       "none");
+            push(&mut args, "-vga", "none");
             args.push("-nographic".into());
-            push(&mut args, "-bios",      OVMF_IN_CONTAINER);
-            push(&mut args, "-machine",   &q.machine);
-            for v in &q.globals { push(&mut args, "-global", v); }
-            for v in &q.objects { push(&mut args, "-object", v); }
-            for v in &q.netdevs { push(&mut args, "-netdev", v); }
-            for v in &q.devices { push(&mut args, "-device", v); }
-            for v in &q.fw_cfg  { push(&mut args, "-fw_cfg", v); }
+            push(&mut args, "-bios", OVMF_IN_CONTAINER);
+            push(&mut args, "-machine", &q.machine);
+            for v in &q.globals {
+                push(&mut args, "-global", v);
+            }
+            for v in &q.objects {
+                push(&mut args, "-object", v);
+            }
+            for v in &q.netdevs {
+                push(&mut args, "-netdev", v);
+            }
+            for v in &q.devices {
+                push(&mut args, "-device", v);
+            }
+            for v in &q.fw_cfg {
+                push(&mut args, "-fw_cfg", v);
+            }
         }
         None => {
             // Canonical direct-boot defaults: minimal args from
             // https://github.com/canonical/tdx/blob/3.3/guest-tools/direct-boot/boot_direct.sh#L54
-            push(&mut args, "-accel",   "kvm");
-            push(&mut args, "-m",       memory);
-            push(&mut args, "-smp",     &cpus.to_string());
-            push(&mut args, "-cpu",     "host");
-            push(&mut args, "-machine", "q35,kernel-irqchip=split,hpet=off,smm=off,pic=off");
-            push(&mut args, "-bios",    OVMF_IN_CONTAINER);
+            push(&mut args, "-accel", "kvm");
+            push(&mut args, "-m", memory);
+            push(&mut args, "-smp", &cpus.to_string());
+            push(&mut args, "-cpu", "host");
+            push(
+                &mut args,
+                "-machine",
+                "q35,kernel-irqchip=split,hpet=off,smm=off,pic=off",
+            );
+            push(&mut args, "-bios", OVMF_IN_CONTAINER);
             args.push("-nographic".into());
             args.push("-nodefaults".into());
-            push(&mut args, "-serial",  "stdio");
+            push(&mut args, "-serial", "stdio");
         }
     }
     args
@@ -409,7 +432,10 @@ fn resolve_metadata_path(metadata_path: &Path, path: &str) -> PathBuf {
 /// Returns the host's `kvm` group id, if the group exists. Used to grant the
 /// container access to `/dev/kvm` and `/dev/vhost-vsock`.
 fn kvm_group_id() -> Option<String> {
-    let out = Command::new("getent").args(["group", "kvm"]).output().ok()?;
+    let out = Command::new("getent")
+        .args(["group", "kvm"])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -434,11 +460,19 @@ fn build_docker_image(
         ),
         "main" => info!(
             "QEMU source: {distribution} main archive ({})",
-            if pkg.version.is_empty() { "latest" } else { pkg.version }
+            if pkg.version.is_empty() {
+                "latest"
+            } else {
+                pkg.version
+            }
         ),
         other => info!(
             "QEMU source: {other} ({})",
-            if pkg.version.is_empty() { "?" } else { pkg.version }
+            if pkg.version.is_empty() {
+                "?"
+            } else {
+                pkg.version
+            }
         ),
     }
 
@@ -446,11 +480,16 @@ fn build_docker_image(
     let status = Command::new("docker")
         .arg("build")
         .args(["--progress", "plain", "--tag", IMAGE_NAME])
-        .arg("--build-arg").arg(format!("DISTRIBUTION={pinned_image}"))
-        .arg("--build-arg").arg(format!("QEMU_SOURCE={}", pkg.source))
-        .arg("--build-arg").arg(format!("QEMU_VERSION={}", pkg.version))
-        .arg("--build-arg").arg(format!("ACPI_TABLES_NAME={acpi_tables_name}"))
-        .arg("--file").arg(dockerfile_dir.join("Dockerfile.qemu-acpi-dump"))
+        .arg("--build-arg")
+        .arg(format!("DISTRIBUTION={pinned_image}"))
+        .arg("--build-arg")
+        .arg(format!("QEMU_SOURCE={}", pkg.source))
+        .arg("--build-arg")
+        .arg(format!("QEMU_VERSION={}", pkg.version))
+        .arg("--build-arg")
+        .arg(format!("ACPI_TABLES_NAME={acpi_tables_name}"))
+        .arg("--file")
+        .arg(dockerfile_dir.join("Dockerfile.qemu-acpi-dump"))
         .arg(dockerfile_dir)
         .status()
         .context("Failed to invoke `docker build`")?;
@@ -498,8 +537,10 @@ fn run_docker_container(
     if need_vhost_vsock && Path::new("/dev/vhost-vsock").exists() {
         cmd.args(["--device", "/dev/vhost-vsock:/dev/vhost-vsock"]);
     }
-    cmd.arg("-v").arg(format!("{}:{OVMF_IN_CONTAINER}:ro", bios.display()));
-    cmd.arg("-v").arg(format!("{}:/output", output_dir.display()));
+    cmd.arg("-v")
+        .arg(format!("{}:{OVMF_IN_CONTAINER}:ro", bios.display()));
+    cmd.arg("-v")
+        .arg(format!("{}:/output", output_dir.display()));
     cmd.arg(IMAGE_NAME);
     cmd.args(qemu_args);
 
@@ -533,9 +574,12 @@ pub fn generate_acpi_tables(
         .canonicalize()
         .with_context(|| format!("BIOS file not found: {}", boot_config.bios))?;
     let acpi_tables_target = resolve_metadata_path(metadata_path, &boot_config.acpi_tables);
-    let acpi_tables_dir = acpi_tables_target
-        .parent()
-        .with_context(|| format!("acpi_tables has no parent dir: {}", acpi_tables_target.display()))?;
+    let acpi_tables_dir = acpi_tables_target.parent().with_context(|| {
+        format!(
+            "acpi_tables has no parent dir: {}",
+            acpi_tables_target.display()
+        )
+    })?;
     fs_err::create_dir_all(acpi_tables_dir)?;
     let acpi_tables_name = acpi_tables_target
         .file_name()
@@ -543,7 +587,10 @@ pub fn generate_acpi_tables(
         .context("acpi_tables path must end with a filename")?;
     info!(
         "ACPI gen config: cpus={}, memory={}, bios={}, target={}",
-        boot_config.cpus, boot_config.memory, bios.display(), acpi_tables_target.display()
+        boot_config.cpus,
+        boot_config.memory,
+        bios.display(),
+        acpi_tables_target.display()
     );
     if let Some(q) = &boot_config.qemu {
         info!(
@@ -565,7 +612,11 @@ pub fn generate_acpi_tables(
     let output_dir = tempfile::tempdir().context("Failed to create ACPI output dir")?;
     fs_err::set_permissions(output_dir.path(), std::fs::Permissions::from_mode(0o777))?;
 
-    let qemu_args = build_qemu_args(boot_config.qemu.as_ref(), boot_config.cpus, &boot_config.memory);
+    let qemu_args = build_qemu_args(
+        boot_config.qemu.as_ref(),
+        boot_config.cpus,
+        &boot_config.memory,
+    );
     let need_kvm = boot_config
         .qemu
         .as_ref()
@@ -573,13 +624,22 @@ pub fn generate_acpi_tables(
         .unwrap_or(true);
     let need_vhost_vsock = boot_config.qemu.is_some();
 
-    run_docker_container(&bios, output_dir.path(), &qemu_args, need_kvm, need_vhost_vsock)?;
+    run_docker_container(
+        &bios,
+        output_dir.path(),
+        &qemu_args,
+        need_kvm,
+        need_vhost_vsock,
+    )?;
 
     // Move the produced ACPI tables into place; `fs::copy` would inherit the
     // container's restrictive 0600 from the source, so widen to 0644 after.
     let produced = output_dir.path().join(acpi_tables_name);
     if !produced.exists() {
-        bail!("ACPI tables not found in container output: {}", produced.display());
+        bail!(
+            "ACPI tables not found in container output: {}",
+            produced.display()
+        );
     }
     fs_err::copy(&produced, &acpi_tables_target)?;
     fs_err::set_permissions(&acpi_tables_target, std::fs::Permissions::from_mode(0o644))?;
@@ -643,12 +703,7 @@ mod tests {
 
     #[test]
     fn list_acpi_tables_walks_blob_and_stops_at_padding() {
-        let blob = build_blob(&[
-            (b"FACS", 64),
-            (b"DSDT", 100),
-            (b"FACP", 244),
-            (b"RSDT", 40),
-        ]);
+        let blob = build_blob(&[(b"FACS", 64), (b"DSDT", 100), (b"FACP", 244), (b"RSDT", 40)]);
         let list = list_acpi_tables(&blob).unwrap();
         let sigs: Vec<&[u8]> = list.iter().map(|(s, ..)| s.as_slice()).collect();
         assert_eq!(sigs, [b"FACS".as_slice(), b"DSDT", b"FACP", b"RSDT"]);
@@ -721,7 +776,10 @@ mod tests {
             (b"RSDT", 52), // header (36) + 4 × 4-byte entries
         ]);
         let loader = derive_table_loader(&blob).unwrap();
-        let cmds: Vec<_> = split_cmds(&loader).into_iter().map(decode_loader_cmd).collect();
+        let cmds: Vec<_> = split_cmds(&loader)
+            .into_iter()
+            .map(decode_loader_cmd)
+            .collect();
 
         // Expected command sequence per the docstring on derive_table_loader.
         // Allocate rsdp + Allocate tables + AddChecksum DSDT + 3×AddPtr FACP + AddChecksum FACP
@@ -780,21 +838,30 @@ mod tests {
             (b"RSDT", 56),
         ]);
         let loader = derive_table_loader(&blob).unwrap();
-        let cmds: Vec<_> = split_cmds(&loader).into_iter().map(decode_loader_cmd).collect();
+        let cmds: Vec<_> = split_cmds(&loader)
+            .into_iter()
+            .map(decode_loader_cmd)
+            .collect();
 
         // 17 + 2 commands now: one extra AddChecksum HPET + one extra AddPtr RSDT entry.
         assert_eq!(cmds.len(), 19);
         // Count AddChecksums in `etc/acpi/tables` (i.e. tables blob, not rsdp).
-        let checksum_tables: Vec<_> = cmds.iter()
+        let checksum_tables: Vec<_> = cmds
+            .iter()
             .filter(|c| c.0 == 3 && c.1 == "etc/acpi/tables")
             .collect();
         // DSDT + FACP + APIC + HPET + MCFG + WAET + RSDT = 7
         assert_eq!(checksum_tables.len(), 7);
         // Count RSDT-entry AddPtrs (5 vs the 4 the old code emitted).
         let rsdt_off = 64 + 100 + 244 + 144 + 56 + 60 + 40;
-        let rsdt_ptrs: Vec<_> = cmds.iter()
-            .filter(|c| c.0 == 2 && c.1 == "etc/acpi/tables"
-                     && c.3[0] >= rsdt_off + 36 && c.3[0] < rsdt_off + 36 + 5 * 4)
+        let rsdt_ptrs: Vec<_> = cmds
+            .iter()
+            .filter(|c| {
+                c.0 == 2
+                    && c.1 == "etc/acpi/tables"
+                    && c.3[0] >= rsdt_off + 36
+                    && c.3[0] < rsdt_off + 36 + 5 * 4
+            })
             .collect();
         assert_eq!(rsdt_ptrs.len(), 5);
     }
@@ -837,15 +904,22 @@ mod tests {
         // Pinned because the Canonical-defaults scenario depends on this exact order.
         let args = build_qemu_args(None, 4, "2048M");
         let expected: Vec<&str> = vec![
-            "-accel", "kvm",
-            "-m", "2048M",
-            "-smp", "4",
-            "-cpu", "host",
-            "-machine", "q35,kernel-irqchip=split,hpet=off,smm=off,pic=off",
-            "-bios", OVMF_IN_CONTAINER,
+            "-accel",
+            "kvm",
+            "-m",
+            "2048M",
+            "-smp",
+            "4",
+            "-cpu",
+            "host",
+            "-machine",
+            "q35,kernel-irqchip=split,hpet=off,smm=off,pic=off",
+            "-bios",
+            OVMF_IN_CONTAINER,
             "-nographic",
             "-nodefaults",
-            "-serial", "stdio",
+            "-serial",
+            "stdio",
         ];
         let got: Vec<&str> = args.iter().map(|s| s.to_str().unwrap()).collect();
         assert_eq!(got, expected);
@@ -873,24 +947,39 @@ mod tests {
 
         // Core seven flags first (in a documented order), then -machine, then
         // user-supplied lists in -global / -object / -netdev / -device / -fw_cfg order.
-        assert_eq!(args, vec![
-            "-accel", "tcg",
-            "-m", "16384M",
-            "-smp", "8,maxcpus=8",
-            "-cpu", "Skylake-Server,phys-bits=46",
-            "-no-reboot",
-            "-nodefaults",
-            "-vga", "none",
-            "-nographic",
-            "-bios", OVMF_IN_CONTAINER,
-            "-machine", "q35,kernel_irqchip=split,smm=off,pic=off",
-            "-global", "q35-pcihost.pci-hole64-size=4096G",
-            "-object", "memory-backend-ram,id=mem0,size=16384M",
-            "-netdev", "hubport,id=net0,hubid=0",
-            "-device", "e1000,netdev=net0,bus=pcie.0,addr=0x2,romfile=",
-            "-device", "virtio-rng-pci",
-            "-fw_cfg", "name=opt/ovmf/X-PciMmio64Mb,string=262144",
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                "-accel",
+                "tcg",
+                "-m",
+                "16384M",
+                "-smp",
+                "8,maxcpus=8",
+                "-cpu",
+                "Skylake-Server,phys-bits=46",
+                "-no-reboot",
+                "-nodefaults",
+                "-vga",
+                "none",
+                "-nographic",
+                "-bios",
+                OVMF_IN_CONTAINER,
+                "-machine",
+                "q35,kernel_irqchip=split,smm=off,pic=off",
+                "-global",
+                "q35-pcihost.pci-hole64-size=4096G",
+                "-object",
+                "memory-backend-ram,id=mem0,size=16384M",
+                "-netdev",
+                "hubport,id=net0,hubid=0",
+                "-device",
+                "e1000,netdev=net0,bus=pcie.0,addr=0x2,romfile=",
+                "-device",
+                "virtio-rng-pci",
+                "-fw_cfg",
+                "name=opt/ovmf/X-PciMmio64Mb,string=262144",
+            ]
+        );
     }
-
 }

@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
 }
 
 fn cli_binary() -> PathBuf {
@@ -90,7 +92,11 @@ fn create_acpi_tables_reproduces_each_fixture_byte_for_byte() {
 
         // Each fixture has been tested against ubuntu:25.04 (Canonical fallback)
         // or ubuntu:26.04 (qemu block). Pick by inspecting the metadata.
-        let distro = if accel == "kvm" { "ubuntu:25.04" } else { "ubuntu:26.04" };
+        let distro = if accel == "kvm" {
+            "ubuntu:25.04"
+        } else {
+            "ubuntu:26.04"
+        };
 
         let status = Command::new(&cli)
             .arg(fixture.join("metadata.json"))
@@ -102,7 +108,9 @@ fn create_acpi_tables_reproduces_each_fixture_byte_for_byte() {
         if !captured.exists() {
             // Re-stash so the post-comparison can fail meaningfully.
             std::fs::rename(&stash, &captured).expect("restore captured bytes");
-            panic!("{name}: --create-acpi-tables didn't produce acpi_tables.bin (status={status:?})");
+            panic!(
+                "{name}: --create-acpi-tables didn't produce acpi_tables.bin (status={status:?})"
+            );
         }
         let regenerated = std::fs::read(&captured).expect("read regenerated acpi_tables.bin");
         // Replace the just-generated file with the captured one so subsequent
