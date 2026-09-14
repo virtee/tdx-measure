@@ -1,0 +1,10 @@
+# Revisions ignored by `git blame`.
+# Only mechanical, no-behaviour-change commits belong here.
+# GitHub picks this file up automatically.
+# Locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: sort Cargo manifests with cargo-sort
+a7484b7244638a3a4a5b3c76bb47adec94e7455d
+
+# style: format Rust sources with cargo fmt
+c899e0dc2f2c6a567b0375e168017d896aa79568
