@@ -64,7 +64,8 @@ Create `metadata.json` file with the below metadata:
     "bios": "[path to OVMF.fd]",
     "acpi_tables": "[path to acpi_tables.bin]",
     "rsdp": "[path to rsdp.bin]",
-    "table_loader": "[path to table_loader.bin]"
+    "table_loader": "[path to table_loader.bin]",
+    "smbios": "[path to smbios_tables.bin]"
   },
   "direct": {
     "kernel": "[path to vmlinuz]",
@@ -144,6 +145,9 @@ Create `metadata.json` file with the below metadata:
     In this case, this flag is not needed.
     Alternatively, a file containing the RSDP can be extracted by running the [`extract_config_files.py`](extract_config_files.py) script inside a TD, which is configured identically to the target configuration.
     In this case, the extracted file can be provided with this flag.
+  - `smbios` *(optional)*: Path to file (e.g., `smbios_tables.bin`) containing the SMBIOS table, which describes the platform's hardware and firmware inventory.
+    The file can be extracted by running the [`extract_config_files.py`](extract_config_files.py) script inside a TD, which is configured identically to the target configuration.
+    Required from OVMF 2025.05 onwards, since that release measures the SMBIOS table into `RTMR[0]`; without it, the tool's `RTMR[0]` prediction will not match for those OVMF versions.
   - `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`.
     When present, the QEMU command is built from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`).
     All fields except `machine` are passed verbatim; `machine` is normalized so `smm=off` and `pic=off` are present even when omitted.

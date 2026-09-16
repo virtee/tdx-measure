@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
 pub use machine::{Machine, QemuInfo};
-pub use tdvf::{direct_boot_boot_order_bytes, direct_boot_boot_variable_payloads};
+pub use tdvf::{
+    direct_boot_boot_order_bytes, direct_boot_boot_variable_payloads,
+    ovmf_exposes_smbios_measurement,
+};
 
 use util::{measure_log, measure_sha384};
 
@@ -18,6 +21,7 @@ mod image;
 mod kernel;
 mod machine;
 mod num;
+mod smbios;
 mod tdvf;
 mod util;
 
@@ -26,6 +30,9 @@ pub const OVMF_BOOT_EVENTS_VERSION: (u16, u8) = (2025, 5);
 
 /// The upstream release that introduced fw_cfg (BootMenu + bootorder) measurement into RTMR0.
 pub const OVMF_FW_CFG_VERSION: (u16, u8) = (2025, 5);
+
+/// The upstream release that introduced SMBIOS table measurement into RTMR0.
+pub const OVMF_SMBIOS_VERSION: (u16, u8) = (2025, 5);
 
 /// Package metadata for a single supported distribution.
 pub struct DistributionDef {
@@ -177,6 +184,7 @@ pub struct BootConfig {
     pub table_loader: Option<String>,
     pub boot_order: Option<String>,
     pub path_boot_xxxx: Option<String>,
+    pub smbios: Option<String>,
     pub qemu: Option<QemuShape>,
 }
 
@@ -458,5 +466,21 @@ mod tests {
                 "default OVMF version '{def_ver}' for {name} is not parseable"
             );
         }
+    }
+
+    #[test]
+    fn boot_config_smbios_field_is_optional_in_json() {
+        // Without the smbios key the field must deserialize to None.
+        let without: BootConfig = serde_json::from_str(
+            r#"{"cpus":2,"memory":"4G","bios":"OVMF.fd","acpi_tables":"acpi.bin"}"#,
+        )
+        .expect("deserialize without smbios");
+        assert!(without.smbios.is_none());
+
+        // With the smbios key the field must round-trip correctly.
+        let with: BootConfig = serde_json::from_str(
+            r#"{"cpus":2,"memory":"4G","bios":"OVMF.fd","acpi_tables":"acpi.bin","smbios":"smbios_tables.bin"}"#,
+        ).expect("deserialize with smbios");
+        assert_eq!(with.smbios.as_deref(), Some("smbios_tables.bin"));
     }
 }
