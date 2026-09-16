@@ -161,6 +161,14 @@ if [[ "$mode" == "all" || "$mode" == "--versioned-only" ]]; then
             "debian_patch_version": "2025.11-3ubuntu7",
             "debian_patch_sha256": "543fb34c9be9b4a2846dc76d59657f7d47469bf42adf6e0801c95714791b9cfe",
             "expected_firmware_sha256": "b3a9f412e59dbaa4d183dbf270ffe9b4199c4c5d18530f581949825d22576f04"
+        },
+        {
+            "edk2_version": "edk2-stable202505",
+            "edk2_commit": "6951dfe7d59d144a3a980bd7eda699db2d8554ac",
+            "ubuntu_snapshot": "20260903T000000Z",
+            "debian_patch_version": "2025.11-3ubuntu7",
+            "debian_patch_sha256": "543fb34c9be9b4a2846dc76d59657f7d47469bf42adf6e0801c95714791b9cfe",
+            "expected_firmware_sha256": "1bb4c8406bc3311c7216930507d54c40085a351ffe5244698993b7f303448889"
         }
     ]'
 

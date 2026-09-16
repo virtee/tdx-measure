@@ -3,6 +3,7 @@
 !*/metadata.json
 !*/acpi_tables.bin
 !*/expected.json
+!*/smbios_tables.bin
 
 # OVMF.fd is large and reproducible; let tests/fetch_ovmf.sh download it.
 OVMF.fd

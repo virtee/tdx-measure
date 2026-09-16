@@ -29,12 +29,12 @@ pub fn cli() -> PathBuf {
     PathBuf::from("tdx-measure")
 }
 
-/// A direct-boot fixture that ships a captured `acpi_tables.bin`, so a plain `--platform-only` measurement succeeds without generating tables.
+/// A direct-boot fixture that ships a captured `acpi_tables.bin` and `smbios_tables.bin`, letting a `--platform-only` measurement run without having to generate the ACPI tables or extract the SMBIOS tables from inside a TD.
 pub fn direct_boot_metadata() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("q35-with-hpet")
+        .join("upstream-edk2-202505")
         .join("metadata.json")
 }
 

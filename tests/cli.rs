@@ -14,3 +14,6 @@ mod ovmf_version_flag;
 
 #[path = "cli/qemu_flags.rs"]
 mod qemu_flags;
+
+#[path = "cli/smbios.rs"]
+mod smbios;
