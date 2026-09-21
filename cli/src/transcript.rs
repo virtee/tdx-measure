@@ -604,7 +604,7 @@ fn format_device_path_list(data: &[u8]) -> String {
 
 /// Parse BootOrder variable (array of UINT16 values in little-endian)
 fn parse_boot_order(data: &[u8]) -> Result<Vec<u16>> {
-    if data.len() % 2 != 0 {
+    if !data.len().is_multiple_of(2) {
         return Err(anyhow!(
             "BootOrder data length must be even (got {} bytes)",
             data.len()
@@ -735,7 +735,7 @@ fn write_boot_variables(
     // Parse and display BootOrder
     let boot_entries = write_boot_order_analysis(
         output,
-        &paths.boot_order.as_deref().unwrap_or(""),
+        paths.boot_order.as_deref().unwrap_or(""),
         direct_boot,
         ovmf_version,
     )?;
@@ -829,7 +829,7 @@ fn write_boot_option_analysis(output: &mut Vec<u8>, name: &str, data: &[u8]) -> 
     }
 
     // Pretty print Boot#### variable
-    match parse_boot_option(&data) {
+    match parse_boot_option(data) {
         Ok(boot_option) => {
             writeln!(output, "EFI_LOAD_OPTION structure:").unwrap();
             writeln!(

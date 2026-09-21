@@ -25,7 +25,7 @@ fn guestfish_download(qcow2_path: &str, source_path: &str) -> Result<Vec<u8>> {
 
     // Download the file using guestfish
     let output = Command::new("guestfish")
-        .args(&[
+        .args([
             "--ro",
             "-a",
             qcow2_path,
@@ -61,7 +61,7 @@ fn guestfish_download(qcow2_path: &str, source_path: &str) -> Result<Vec<u8>> {
 fn extract_gpt_event_data(qcow2_path: &str) -> Result<Vec<u8>> {
     // Extract GPT header from LBA 1 (skip MBR at LBA 0)
     let output = Command::new("guestfish")
-        .args(&[
+        .args([
             "--ro",
             "-a",
             qcow2_path,
@@ -101,14 +101,14 @@ fn extract_gpt_event_data(qcow2_path: &str) -> Result<Vec<u8>> {
 
     // Calculate how many sectors we need to read for all partition entries
     let entries_size = num_entries * entry_size;
-    let sectors_needed = (entries_size + 511) / 512; // Round up to sector boundary
+    let sectors_needed = entries_size.div_ceil(512); // Round up to sector boundary
 
     // Extract partition entries
     let entries_offset = partition_entry_lba * 512;
     let entries_length = sectors_needed * 512;
 
     let output = Command::new("guestfish")
-        .args(&[
+        .args([
             "--ro",
             "-a",
             qcow2_path,
