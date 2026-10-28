@@ -55,8 +55,21 @@ fn resolve_docker_source(source: &str) -> (String, Option<String>) {
     }
 }
 
+/// Returns a value unique to this invocation, used for transient image tags and cache-busting build args.
+fn unique_suffix() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    )
+}
+
 /// Builds the `docker build` command shared by the fetcher and full-build images.
 /// `qemu_version` is passed explicitly so a caller can pin a version resolved by an earlier fetcher run.
+/// An empty `qemu_version` means "latest in the archive", so a unique `QEMU_FETCH_NONCE` is passed to stop Docker from reusing a cached fetch of an older tip.
 fn docker_build_cmd(
     dockerfile_dir: &Path,
     pkg: &QemuPkg,
@@ -79,6 +92,10 @@ fn docker_build_cmd(
         .arg(format!("QEMU_VERSION={qemu_version}"));
     if let Some(qemu_ppa) = &qemu_ppa_arg {
         cmd.arg("--build-arg").arg(format!("QEMU_PPA={qemu_ppa}"));
+    }
+    if qemu_version.is_empty() {
+        cmd.arg("--build-arg")
+            .arg(format!("QEMU_FETCH_NONCE={}", unique_suffix()));
     }
     cmd.arg("--file")
         .arg(dockerfile_dir.join("Dockerfile.qemu"))
@@ -148,14 +165,7 @@ fn remove_docker_image(tag: &str) {
 /// Builds the fetcher stage and runs it to learn the concrete QEMU version the Dockerfile resolves to.
 /// The transient version-resolver image is always removed afterwards, even if the run fails.
 fn run_version_resolver(dockerfile_dir: &Path, pkg: &QemuPkg) -> Result<String> {
-    let tag = format!(
-        "{VERSION_RESOLVER_IMAGE_NAME}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
+    let tag = format!("{VERSION_RESOLVER_IMAGE_NAME}-{}", unique_suffix());
 
     build_version_resolver_image(dockerfile_dir, pkg, &tag)?;
 
@@ -235,4 +245,52 @@ pub(crate) fn run_docker_container(
         bail!("QEMU execution failed (exit {status})");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PKG: QemuPkg<'static> = QemuPkg {
+        source: "main",
+        version: "",
+        base_image: "ubuntu:26.04@sha256:abc",
+    };
+
+    fn build_args(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn fetch_nonce(args: &[String]) -> Option<&str> {
+        args.iter()
+            .find_map(|a| a.strip_prefix("QEMU_FETCH_NONCE="))
+    }
+
+    #[test]
+    fn docker_build_cmd_busts_fetch_cache_for_archive_tip() {
+        let dir = Path::new("/ctx");
+        let first = build_args(&docker_build_cmd(dir, &PKG, "", "t", Some("fetcher")));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        let second = build_args(&docker_build_cmd(dir, &PKG, "", "t", Some("fetcher")));
+
+        let first_nonce = fetch_nonce(&first).expect("nonce missing for archive tip");
+        let second_nonce = fetch_nonce(&second).expect("nonce missing for archive tip");
+        assert!(!first_nonce.is_empty());
+        assert_ne!(first_nonce, second_nonce);
+    }
+
+    #[test]
+    fn docker_build_cmd_keeps_pinned_version_cacheable() {
+        let args = build_args(&docker_build_cmd(
+            Path::new("/ctx"),
+            &PKG,
+            "1:10.2.1+ds-1ubuntu4",
+            "t",
+            None,
+        ));
+        assert!(args.contains(&"QEMU_VERSION=1:10.2.1+ds-1ubuntu4".to_string()));
+        assert_eq!(fetch_nonce(&args), None);
+    }
 }

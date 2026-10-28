@@ -24,8 +24,12 @@ RUN apt-get update && \
 ARG QEMU_PPA=ppa:kobuk-team/tdx-release
 
 WORKDIR /
+# Set to a unique value by the tool whenever QEMU_VERSION is empty, so the fetch below cannot reuse a cached layer holding a stale archive tip.
+# Left empty for pinned versions, whose fetch layers remain cacheable.
+ARG QEMU_FETCH_NONCE=
 # Without an explicit QEMU_VERSION, fetch the latest package for the base image's release rather than the fetchers' default of Ubuntu's development series.
-RUN QEMU_TARGET="${QEMU_VERSION:-$(lsb_release -cs)}" && \
+RUN echo "QEMU fetch nonce: ${QEMU_FETCH_NONCE:-none}" && \
+    QEMU_TARGET="${QEMU_VERSION:-$(lsb_release -cs)}" && \
     if [ "$QEMU_SOURCE" = "ppa" ]; then \
         pull-ppa-source --ppa ${QEMU_PPA} qemu "$QEMU_TARGET"; \
     elif [ "$QEMU_SOURCE" = "main" ]; then \
