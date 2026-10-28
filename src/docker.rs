@@ -19,10 +19,9 @@ pub(crate) const OVMF_IN_CONTAINER: &str = "/usr/share/ovmf/OVMF.fd";
 /// Describes how to fetch the QEMU source package for a given distribution.
 pub struct QemuPkg<'a> {
     /// `ppa:<OWNER>/<NAME>` -> `pull-ppa-source --ppa ppa:<OWNER>/<NAME> qemu $VERSION`
-    /// `main` -> `pull-lp-source qemu $VERSION` (or latest in main when empty)
+    /// `main` -> `pull-lp-source qemu $VERSION`
     pub source: &'a str,
-    /// Version handed to the source fetcher. Empty string == "let the fetcher
-    /// pick the current main-archive version" (only meaningful for `main`).
+    /// Version handed to the source fetcher. Empty string == "fetch the latest version for the base image's release", for both `ppa:` and `main` sources.
     pub version: &'a str,
     /// Immutable OCI reference for the base image (e.g. `ubuntu:26.04@sha256:...`).
     pub base_image: &'a str,

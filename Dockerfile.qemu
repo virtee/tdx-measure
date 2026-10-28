@@ -24,10 +24,12 @@ RUN apt-get update && \
 ARG QEMU_PPA=ppa:kobuk-team/tdx-release
 
 WORKDIR /
-RUN if [ "$QEMU_SOURCE" = "ppa" ]; then \
-        pull-ppa-source --ppa ${QEMU_PPA} qemu ${QEMU_VERSION}; \
+# Without an explicit QEMU_VERSION, fetch the latest package for the base image's release rather than the fetchers' default of Ubuntu's development series.
+RUN QEMU_TARGET="${QEMU_VERSION:-$(lsb_release -cs)}" && \
+    if [ "$QEMU_SOURCE" = "ppa" ]; then \
+        pull-ppa-source --ppa ${QEMU_PPA} qemu "$QEMU_TARGET"; \
     elif [ "$QEMU_SOURCE" = "main" ]; then \
-        pull-lp-source qemu ${QEMU_VERSION}; \
+        pull-lp-source qemu "$QEMU_TARGET"; \
     else \
         echo "Unknown QEMU_SOURCE: $QEMU_SOURCE"; exit 1; \
     fi
