@@ -362,13 +362,38 @@ fn qemu_pkg_for<'a>(distribution: &str, version_override: Option<&'a str>) -> Re
     })
 }
 
-/// Builds the QEMU command line that the patched in-container QEMU will run to
-/// dump `etc/acpi/tables`. When `qemu` is `Some(_)`, the command is taken
-/// verbatim from the block plus the seven measurement-related core flags;
-/// nothing else is added implicitly. When `qemu` is `None`, the script falls
-/// back to the Canonical direct-boot defaults so Intel's reference scenario
-/// keeps working unchanged.
-fn build_qemu_args(qemu: Option<&QemuShape>, cpus: u8, memory: &str) -> Vec<OsString> {
+/// Enforces Intel TDX constraints on `smm` and `pic` in a QEMU `-machine` string.
+/// Mirrors QEMU's tdx_kvm_init(): https://github.com/qemu/qemu/blob/2d3df8abca265c9bcc9e438d691d561592060998/target/i386/kvm/tdx.c#L679-L700
+/// If absent, defaults to =off; if explicitly set to =on, returns an error.
+fn sanitize_machine(machine: &str) -> Result<String> {
+    let mut out = machine.to_owned();
+    for flag in ["smm", "pic"] {
+        // Use the last occurrence - QEMU uses last-wins semantics for duplicate keys.
+        let existing = out
+            .split(',')
+            .filter_map(|part| {
+                let (k, v) = part.split_once('=')?;
+                (k == flag).then_some(v)
+            })
+            .next_back();
+        match existing {
+            Some("off") => {}
+            Some(value) => bail!("Intel TDX requires {flag}=off in the qemu.machine field of metadata.json; got {flag}={value}"),
+            None => {
+                if !out.is_empty() && !out.ends_with(',') {
+                    out.push(',');
+                }
+                out.push_str(&format!("{flag}=off"));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Builds the QEMU command line that the patched in-container QEMU will run to dump `etc/acpi/tables`.
+/// When `qemu` is `Some(_)`, the command is built from the block plus the measurement-related core flags, a normalized `-machine` value (`smm=off` / `pic=off` added when absent, rejected when `=on`).
+/// When `qemu` is `None`, the script falls back to the Canonical direct-boot defaults so Intel's reference scenario keeps working unchanged.
+fn build_qemu_args(qemu: Option<&QemuShape>, cpus: u8, memory: &str) -> Result<Vec<OsString>> {
     let mut args: Vec<OsString> = Vec::new();
     let push = |args: &mut Vec<OsString>, k: &str, v: &str| {
         args.push(k.into());
@@ -386,7 +411,7 @@ fn build_qemu_args(qemu: Option<&QemuShape>, cpus: u8, memory: &str) -> Vec<OsSt
             push(&mut args, "-vga", "none");
             args.push("-nographic".into());
             push(&mut args, "-bios", OVMF_IN_CONTAINER);
-            push(&mut args, "-machine", &q.machine);
+            push(&mut args, "-machine", &sanitize_machine(&q.machine)?);
             for v in &q.globals {
                 push(&mut args, "-global", v);
             }
@@ -421,7 +446,7 @@ fn build_qemu_args(qemu: Option<&QemuShape>, cpus: u8, memory: &str) -> Vec<OsSt
             push(&mut args, "-serial", "stdio");
         }
     }
-    args
+    Ok(args)
 }
 
 /// Resolves a metadata-relative path against `metadata_path`'s parent.
@@ -592,12 +617,6 @@ pub fn generate_acpi_tables(
         bios.display(),
         acpi_tables_target.display()
     );
-    if let Some(q) = &boot_config.qemu {
-        info!(
-            "Using boot_config.qemu shape: machine='{}' cpu='{}' accel='{}'",
-            q.machine, q.cpu, q.accel
-        );
-    }
 
     // Stage the Dockerfile into a temp build context so `docker build` finds it.
     let build_ctx = tempfile::tempdir().context("Failed to create docker build context")?;
@@ -616,7 +635,23 @@ pub fn generate_acpi_tables(
         boot_config.qemu.as_ref(),
         boot_config.cpus,
         &boot_config.memory,
-    );
+    )?;
+    if let Some(q) = &boot_config.qemu {
+        // The effective value is what QEMU actually receives.
+        // It determines the ACPI tables used for measurement.
+        let effective_machine = qemu_args
+            .iter()
+            .zip(qemu_args.iter().skip(1))
+            .find(|(k, _)| *k == "-machine")
+            .map(|(_, v)| v.to_string_lossy());
+        info!(
+            "QEMU config: requested_machine='{}', effective_machine='{}', cpu='{}', accel='{}'",
+            q.machine,
+            effective_machine.as_deref().unwrap_or("?"),
+            q.cpu,
+            q.accel,
+        );
+    }
     let need_kvm = boot_config
         .qemu
         .as_ref()
@@ -902,7 +937,7 @@ mod tests {
     fn build_qemu_args_canonical_fallback_matches_dstack_reference() {
         // Canonical direct-boot args from the upstream `dstack`-derived flow.
         // Pinned because the Canonical-defaults scenario depends on this exact order.
-        let args = build_qemu_args(None, 4, "2048M");
+        let args = build_qemu_args(None, 4, "2048M").unwrap();
         let expected: Vec<&str> = vec![
             "-accel",
             "kvm",
@@ -941,6 +976,7 @@ mod tests {
             fw_cfg: vec!["name=opt/ovmf/X-PciMmio64Mb,string=262144".into()],
         };
         let args = build_qemu_args(Some(&shape), 8, "16384M")
+            .unwrap()
             .into_iter()
             .map(|s| s.into_string().unwrap())
             .collect::<Vec<_>>();
@@ -981,5 +1017,165 @@ mod tests {
                 "name=opt/ovmf/X-PciMmio64Mb,string=262144",
             ]
         );
+    }
+
+    #[test]
+    fn build_qemu_args_normalizes_machine_appending_smm_and_pic_off() {
+        let shape = QemuShape {
+            machine: "q35,kernel_irqchip=split,memory-backend=mem0".into(),
+            cpu: "host".into(),
+            accel: "kvm".into(),
+            globals: vec![],
+            objects: vec![],
+            netdevs: vec![],
+            devices: vec![],
+            fw_cfg: vec![],
+        };
+        let args = build_qemu_args(Some(&shape), 4, "8192M")
+            .unwrap()
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect::<Vec<_>>();
+
+        // smm=off and pic=off must be appended to the machine value.
+        let machine_arg = args
+            .iter()
+            .zip(args.iter().skip(1))
+            .find(|(k, _)| k.as_str() == "-machine")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert_eq!(
+            machine_arg,
+            "q35,kernel_irqchip=split,memory-backend=mem0,smm=off,pic=off"
+        );
+    }
+
+    #[test]
+    fn build_qemu_args_does_not_duplicate_existing_smm_or_pic() {
+        let shape = QemuShape {
+            machine: "q35,smm=off,pic=off".into(),
+            cpu: "host".into(),
+            accel: "kvm".into(),
+            globals: vec![],
+            objects: vec![],
+            netdevs: vec![],
+            devices: vec![],
+            fw_cfg: vec![],
+        };
+        let args = build_qemu_args(Some(&shape), 2, "4096M")
+            .unwrap()
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect::<Vec<_>>();
+
+        // smm=off and pic=off are already present — must not be duplicated.
+        let machine_arg = args
+            .iter()
+            .zip(args.iter().skip(1))
+            .find(|(k, _)| k.as_str() == "-machine")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert_eq!(machine_arg, "q35,smm=off,pic=off");
+    }
+
+    #[test]
+    fn build_qemu_args_errors_on_smm_on_or_pic_on() {
+        // QEMU uses last-wins semantics, so duplicates where the last value is =on must also error.
+        for machine in [
+            "q35,smm=on",
+            "q35,pic=on",
+            "q35,smm=on,pic=on",
+            "q35,smm=off,smm=on",
+            "q35,pic=off,pic=on",
+        ] {
+            let shape = QemuShape {
+                machine: machine.into(),
+                cpu: "host".into(),
+                accel: "kvm".into(),
+                globals: vec![],
+                objects: vec![],
+                netdevs: vec![],
+                devices: vec![],
+                fw_cfg: vec![],
+            };
+            assert!(
+                build_qemu_args(Some(&shape), 2, "4096M").is_err(),
+                "expected error for machine={machine}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_qemu_args_smm_pic_last_wins_off_is_accepted() {
+        // Duplicates where the last value is =off should succeed (QEMU last-wins).
+        for machine in ["q35,smm=on,smm=off", "q35,pic=on,pic=off"] {
+            let shape = QemuShape {
+                machine: machine.into(),
+                cpu: "host".into(),
+                accel: "kvm".into(),
+                globals: vec![],
+                objects: vec![],
+                netdevs: vec![],
+                devices: vec![],
+                fw_cfg: vec![],
+            };
+            assert!(
+                build_qemu_args(Some(&shape), 2, "4096M").is_ok(),
+                "expected success for machine={machine}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_qemu_args_handles_trailing_comma_and_empty_machine() {
+        // Trailing comma: should not produce a double comma.
+        let shape = QemuShape {
+            machine: "q35,".into(),
+            cpu: "host".into(),
+            accel: "kvm".into(),
+            globals: vec![],
+            objects: vec![],
+            netdevs: vec![],
+            devices: vec![],
+            fw_cfg: vec![],
+        };
+        let args = build_qemu_args(Some(&shape), 2, "4096M")
+            .unwrap()
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect::<Vec<_>>();
+        let machine_arg = args
+            .iter()
+            .zip(args.iter().skip(1))
+            .find(|(k, _)| k.as_str() == "-machine")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        // Trailing comma means no extra comma inserted before smm=off.
+        assert_eq!(machine_arg, "q35,smm=off,pic=off");
+        assert!(!machine_arg.contains(",,"));
+
+        // Empty machine string: appends defaults without a leading comma.
+        let shape_empty = QemuShape {
+            machine: "".into(),
+            cpu: "host".into(),
+            accel: "kvm".into(),
+            globals: vec![],
+            objects: vec![],
+            netdevs: vec![],
+            devices: vec![],
+            fw_cfg: vec![],
+        };
+        let args = build_qemu_args(Some(&shape_empty), 2, "4096M")
+            .unwrap()
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect::<Vec<_>>();
+        let machine_arg = args
+            .iter()
+            .zip(args.iter().skip(1))
+            .find(|(k, _)| k.as_str() == "-machine")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert_eq!(machine_arg, "smm=off,pic=off");
     }
 }
