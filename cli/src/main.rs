@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use fs_err as fs;
 use std::path::{Path, PathBuf};
-use tdx_measure::{ImageConfig, Machine};
+use tdx_measure::{parse_ovmf_version, ImageConfig, Machine, QemuInfo, SUPPORTED_DISTRIBUTIONS};
 
 mod transcript;
 use transcript::generate_transcript;
@@ -44,13 +44,40 @@ struct Cli {
     #[arg(long)]
     transcript: Option<PathBuf>,
 
-    /// Generate ACPI tables for direct boot. First value is the distribution
-    /// (e.g. ubuntu:25.04, ubuntu:26.04); the optional second value pins a
-    /// specific QEMU source-package version and otherwise defaults to the
-    /// distribution's pinned version. Pass `""` for the version to opt into
-    /// `pull-lp-source`'s current main-archive pick.
-    #[arg(long, num_args = 1..=2, value_names = ["DISTRIBUTION", "QEMU_VERSION"])]
-    create_acpi_tables: Option<Vec<String>>,
+    /// Select distribution defaults for QEMU and OVMF.
+    /// Supported: ubuntu:25.04, ubuntu:26.04.
+    #[arg(long)]
+    distribution: Option<String>,
+
+    /// Select or override the QEMU source-package version.
+    /// Currently used by --create-acpi-tables to pin the version fetched and compiled in Docker.
+    /// Pass "" to fetch the current main-archive tip.
+    /// Planned independent uses (not yet integrated):
+    ///   - kernel patching: QEMU (pre-10.x) patches the kernel header before measuring RTMR1.
+    #[arg(long)]
+    qemu_version: Option<String>,
+
+    /// QEMU package source: main | ppa:<OWNER>/<NAME> (only used with --create-acpi-tables).
+    #[arg(long, requires_all = ["create_acpi_tables", "qemu_base_image"])]
+    qemu_source: Option<String>,
+
+    /// Base OCI image used to build QEMU (only used with --create-acpi-tables).
+    #[arg(long, requires_all = ["create_acpi_tables", "qemu_source"])]
+    qemu_base_image: Option<String>,
+
+    /// Select or override the OVMF version (accepted: edk2-stableYYYYMM or YYYY.MM-NubuntuN[.N]).
+    /// Planned independent uses (not yet integrated):
+    ///   - initrd cmdline ordering: upstream OVMF 2025.08 and later prefix "initrd=initrd" rather than appending.
+    ///   - fw_cfg measurement: upstream OVMF 2025.05 and later add EV_PLATFORM_CONFIG_FLAGS events for FW_CFG.BootMenu and FW_CFG.bootorder into RTMR0.
+    ///   - SMBIOS measurement: upstream OVMF 2025.05 and later add EV_EFI_HANDOFF_TABLES for the SMBIOS table into RTMR0.
+    ///   - Boot#### entries: upstream OVMF 2025.05 and later measure two EV_EFI_VARIABLE_BOOT events into RTMR0.
+    #[arg(long)]
+    ovmf_version: Option<String>,
+
+    /// Generate ACPI tables for direct boot.
+    /// Requires --distribution or both --qemu-source and --qemu-base-image.
+    #[arg(long)]
+    create_acpi_tables: bool,
 }
 
 /// Helper struct to resolve and store file paths
@@ -186,7 +213,8 @@ impl PathResolver {
         metadata_path: &'a Path,
         create_acpi_table: bool,
         distribution: &'a str,
-        qemu_version: Option<&'a str>,
+        qemu_info: QemuInfo<'a>,
+        ovmf_version: Option<(u16, u8)>,
     ) -> Machine<'a> {
         Machine::builder()
             .cpu_count(self.paths.cpu_count)
@@ -209,7 +237,10 @@ impl PathResolver {
             .metadata_path(metadata_path)
             .create_acpi_table(create_acpi_table)
             .distribution(distribution)
-            .maybe_qemu_version(qemu_version)
+            .maybe_qemu_version(qemu_info.version)
+            .maybe_qemu_source(qemu_info.source)
+            .maybe_qemu_base_image(qemu_info.base_image)
+            .maybe_ovmf_version(ovmf_version)
             .build()
     }
 }
@@ -251,17 +282,87 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
 
     // Build machine
     let path_resolver = PathResolver::new(&config.metadata, image_config, !config.runtime_only)?;
-    let create_acpi_table = config.create_acpi_tables.is_some();
-    let (distribution, qemu_version): (&str, Option<&str>) = match &config.create_acpi_tables {
-        Some(vs) => (vs[0].as_str(), vs.get(1).map(String::as_str)),
-        None => ("", None),
-    };
+    let create_acpi_table = config.create_acpi_tables;
+    let qemu_version = config.qemu_version.as_deref();
+    let qemu_source = config.qemu_source.as_deref();
+    let qemu_base_image = config.qemu_base_image.as_deref();
     let mut error_msgs = String::new();
+
+    // Validate --distribution
+    let distribution = config.distribution.as_deref();
+    if let Some(distro) = distribution {
+        if SUPPORTED_DISTRIBUTIONS.find(distro).is_none() {
+            return Err(anyhow!(
+                "Unsupported distribution '{}'. Supported distributions: {}",
+                distro,
+                SUPPORTED_DISTRIBUTIONS.join(", ")
+            ));
+        }
+    }
+
+    // If both --ovmf-version and --distribution are given, --ovmf-version takes precedence over the distribution's default OVMF version.
+    let ovmf_version: Option<(u16, u8)> = if let Some(ver) = config.ovmf_version.as_deref() {
+        Some(parse_ovmf_version(ver).ok_or_else(|| anyhow!(
+            "OVMF version '{}' is invalid. Use OVMF upstream version tag in the format edk2-stableYYYYMM or an Ubuntu package version tag in the format YYYY.MM-NubuntuN[.N]",
+            ver
+        ))?)
+    } else if let Some(distro) = distribution {
+        let default = SUPPORTED_DISTRIBUTIONS
+            .default_ovmf_version(distro)
+            .ok_or_else(|| anyhow!("no default OVMF version for distribution '{}'", distro))?;
+        Some(parse_ovmf_version(default).ok_or_else(|| anyhow!(
+            "Distribution default OVMF version '{}' for '{}' is invalid. Use OVMF upstream version tag in the format edk2-stableYYYYMM or an Ubuntu package version tag in the format YYYY.MM-NubuntuN[.N]",
+            default,
+            distro
+        ))?)
+    } else {
+        None
+    };
+
+    // Validate --qemu-source and --qemu-base-image
+    if let Some(src) = qemu_source {
+        let valid_ppa = src
+            .strip_prefix("ppa:")
+            .and_then(|rest| rest.split_once('/'))
+            .map(|(owner, name)| !owner.is_empty() && !name.is_empty())
+            .unwrap_or(false);
+        if src != "main" && !valid_ppa {
+            return Err(anyhow!(
+                "--qemu-source must be 'main' or 'ppa:<OWNER>/<NAME>' (got '{src}')"
+            ));
+        }
+    }
+    if let Some(img) = qemu_base_image {
+        let valid = match img.split_once("@sha256:") {
+            Some((_, digest)) => {
+                digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit())
+            }
+            None => false,
+        };
+        if !valid {
+            return Err(anyhow!(
+                "--qemu-base-image must be a full reference including a 64-char sha256 digest (e.g. ubuntu:26.04@sha256:...) (got '{img}')"
+            ));
+        }
+    }
 
     // Check usage of --create-acpi-tables flag
     if create_acpi_table {
-        if !direct_boot {
-            error_msgs.push_str("--create-acpi-tables is not valid with indirect boot\n");
+        if config.runtime_only {
+            // Runtime-only measurements do not use platform configuration or generate ACPI tables.
+            eprintln!(
+                "--create-acpi-tables is not required with --runtime-only and will be ignored"
+            );
+        } else {
+            // Validate that --create-acpi-tables is only used with direct boot.
+            if !direct_boot {
+                error_msgs.push_str("--create-acpi-tables is not valid with indirect boot\n");
+            }
+
+            // Validate that --create-acpi-tables is only used with a supported distribution or both --qemu-source and --qemu-base-image.
+            if distribution.is_none() && (qemu_source.is_none() || qemu_base_image.is_none()) {
+                return Err(anyhow!("--create-acpi-tables requires --distribution or both --qemu-source and --qemu-base-image"));
+            }
         }
     }
 
@@ -286,8 +387,13 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
         direct_boot,
         &config.metadata,
         create_acpi_table,
-        distribution,
-        qemu_version,
+        distribution.unwrap_or(""),
+        QemuInfo {
+            version: qemu_version,
+            source: qemu_source,
+            base_image: qemu_base_image,
+        },
+        ovmf_version,
     );
 
     // Measure
@@ -296,11 +402,6 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
             .measure_platform()
             .context("Failed to measure platform")?
     } else if config.runtime_only {
-        if create_acpi_table {
-            eprintln!(
-                "--create-acpi-tables is not required with --runtime-only and will be ignored"
-            );
-        }
         machine
             .measure_runtime()
             .context("Failed to measure runtime")?

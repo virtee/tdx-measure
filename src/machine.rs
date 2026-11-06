@@ -34,6 +34,17 @@ pub struct Machine<'a> {
     pub create_acpi_table: bool,
     pub distribution: &'a str,
     pub qemu_version: Option<&'a str>,
+    pub qemu_source: Option<&'a str>,
+    pub qemu_base_image: Option<&'a str>,
+    pub ovmf_version: Option<(u16, u8)>,
+}
+
+/// The QEMU source, version, and base image to use for a Machine.
+/// Grouped into one struct so these three same-typed `Option<&str>` values are set and read by name, not by position.
+pub struct QemuInfo<'a> {
+    pub version: Option<&'a str>,
+    pub source: Option<&'a str>,
+    pub base_image: Option<&'a str>,
 }
 
 impl Machine<'_> {
