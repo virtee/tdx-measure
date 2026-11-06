@@ -70,14 +70,33 @@ jobs:
         if-no-files-found: error
         retention-days: 7
 
+  build-ovmf-edk2:
+    # Builds the versioned upstream EDK2 OVMF firmware (tests/fixtures/upstream-edk2-*/)
+    # once via Docker and caches it. Runs on every trigger, but the `test` job
+    # below never runs Docker itself: it just restores this cache entry.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+    - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+    - name: Cache versioned OVMF fixtures
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+      with:
+        path: tests/fixtures/upstream-edk2-*/
+        # Key on the fetch script plus the Dockerfile it drives, so a build recipe change (new pin / new URL / patched Dockerfile) invalidates the cache automatically instead of reusing a stale versioned build.
+        key: ovmf-edk2-${{ hashFiles('tests/fetch_ovmf.sh', 'tests/Dockerfile.edk2-ovmf-build') }}
+    - name: Build versioned OVMF firmware
+      run: ./tests/fetch_ovmf.sh --versioned-only
+
   test:
     # Fast tests: 9 unit tests + 2 fixture-walk integration tests. Runs in
-    # well under a minute including the OVMF.fd download (which is cached
-    # across runs so subsequent invocations are sub-second).
+    # well under a minute: the shared OVMF.fd is a small package download, and
+    # the versioned upstream-edk2 firmware is restored from build-ovmf-edk2's
+    # cache, so this job never invokes Docker itself.
     #
     # The slow round-trip docker-based regen test (tests/regen.rs) is gated
     # behind `--ignored` and runs only in the `regen` job below, which is
     # manual / on-demand.
+    needs: build-ovmf-edk2
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
@@ -93,15 +112,26 @@ jobs:
         key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
           cargo-${{ runner.os }}-
-    - name: Cache OVMF.fd
+    - name: Cache shared OVMF.fd
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
       with:
         path: tests/fixtures/OVMF.fd
-        # Key on the fetch script's content so changes (new pin / new URL)
-        # invalidate the cache automatically.
         key: ovmf-fd-${{ hashFiles('tests/fetch_ovmf.sh') }}
-    - name: Fetch OVMF.fd
-      run: ./tests/fetch_ovmf.sh
+    - name: Fetch shared OVMF.fd
+      run: ./tests/fetch_ovmf.sh --shared-only
+    - name: Restore versioned OVMF fixtures
+      # Read-only: build-ovmf-edk2 is the only job that writes this cache entry.
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+      with:
+        path: tests/fixtures/upstream-edk2-*/
+        key: ovmf-edk2-${{ hashFiles('tests/fetch_ovmf.sh', 'tests/Dockerfile.edk2-ovmf-build') }}
+    - name: Verify versioned OVMF fixtures restored
+      run: |
+        shopt -s nullglob
+        for dir in tests/fixtures/upstream-edk2-*/; do
+          bios="$(jq -er '.boot_config.bios' "$dir/metadata.json")"
+          [[ -f "$dir$bios" ]] || { echo "missing $dir$bios; build-ovmf-edk2 cache restore failed" >&2; exit 1; }
+        done
     - name: Run unit + integration tests
       run: cargo test --release
 
@@ -109,7 +139,7 @@ jobs:
     # Slow round-trip test: builds the patched-QEMU Docker image and runs
     # `--create-acpi-tables` against each fixture, asserting bytes match.
     # Runs only on manual dispatch to avoid burning ~5 min on every PR.
-    needs: build
+    needs: [build, build-ovmf-edk2]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -127,13 +157,26 @@ jobs:
         key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
           cargo-${{ runner.os }}-
-    - name: Cache OVMF.fd
+    - name: Cache shared OVMF.fd
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
       with:
         path: tests/fixtures/OVMF.fd
         key: ovmf-fd-${{ hashFiles('tests/fetch_ovmf.sh') }}
-    - name: Fetch OVMF.fd
-      run: ./tests/fetch_ovmf.sh
+    - name: Fetch shared OVMF.fd
+      run: ./tests/fetch_ovmf.sh --shared-only
+    - name: Restore versioned OVMF fixtures
+      # Read-only: build-ovmf-edk2 is the only job that writes this cache entry.
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+      with:
+        path: tests/fixtures/upstream-edk2-*/
+        key: ovmf-edk2-${{ hashFiles('tests/fetch_ovmf.sh', 'tests/Dockerfile.edk2-ovmf-build') }}
+    - name: Verify versioned OVMF fixtures restored
+      run: |
+        shopt -s nullglob
+        for dir in tests/fixtures/upstream-edk2-*/; do
+          bios="$(jq -er '.boot_config.bios' "$dir/metadata.json")"
+          [[ -f "$dir$bios" ]] || { echo "missing $dir$bios; build-ovmf-edk2 cache restore failed" >&2; exit 1; }
+        done
     - name: Download CLI binary
       # Consumes the artifact uploaded by the `build` job; no local rebuild.
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
