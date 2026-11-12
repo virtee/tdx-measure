@@ -70,6 +70,8 @@ pub struct QemuShape {
     pub devices: Vec<String>,
     #[serde(default)]
     pub fw_cfg: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_serial")]
+    pub serial: Option<String>,
 }
 
 fn default_cpu() -> String {
@@ -77,6 +79,20 @@ fn default_cpu() -> String {
 }
 fn default_accel() -> String {
     "kvm".to_string()
+}
+
+// Rejects anything other than "stdio".
+fn deserialize_serial<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    match value {
+        Some(s) if s != "stdio" => Err(serde::de::Error::custom(format!(
+            "unsupported value {s:?} for `serial`: only \"stdio\" is currently supported"
+        ))),
+        other => Ok(other),
+    }
 }
 
 /// Direct boot specific information
