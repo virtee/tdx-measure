@@ -134,16 +134,19 @@ Create `metadata.json` file with the below metadata:
     In this case, this flag is not needed.
     Alternatively, a file containing the RSDP can be extracted by running the [`extract_config_files.py`](extract_config_files.py) script inside a TD, which is configured identically to the target configuration.
     In this case, the extracted file can be provided with this flag.
-
-- `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`. Each field is a thin pass-through to QEMU. When present, the QEMU command is built from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`). When absent, the tool falls back to the Canonical direct-boot args (see Canonical's [`boot_direct.sh`](https://github.com/canonical/tdx/blob/a599cf54510ec81667cedfb183e4da9f96be536d/guest-tools/direct-boot/boot_direct.sh#L54-L68)). If your TD configuration does not match Canonical's, you need to provide the QEMU shape matching your TD configuration, otherwise the tool's `RTMR[0]` prediction will not match the value measured by a real TD. Fields:
-  - `machine` *(required when block is present)*: value passed verbatim to `-machine`, e.g. `"q35,kernel_irqchip=split,memory-backend=mem0,smm=off,pic=off"`.
-  - `cpu` *(optional, default `"host"`)*: value passed verbatim to `-cpu`. Use a named model with an explicit `phys-bits=N` (e.g. `"Skylake-Server,phys-bits=46"`) to make the run independent of the host CPU.
-  - `accel` *(optional, default `"kvm"`)*: value passed verbatim to `-accel`. Use `"tcg"` to skip KVM (CI runners without `/dev/kvm`, ARM hosts via x86 emulation, …).
-  - `globals`: list of strings, each emitted as `-global <value>`.
-  - `objects`: list of strings, each emitted as `-object <value>`.
-  - `netdevs`: list of strings, each emitted as `-netdev <value>`.
-  - `devices`: list of strings, each emitted as `-device <value>`. **Order is part of the API contract**: QEMU's PCI auto-slot assignment iterates `-device` arguments in command-line order and picks the lowest free slot, so `devices` must be authored in the same order as the reference launch you are mirroring. A `slot=N` argument on a `pcie-root-port` is only a hint and shifts if the slot is already taken by an earlier auto-assigned device. Order within `globals` / `objects` / `netdevs` / `fw_cfg` does not influence the ACPI tables.
-  - `fw_cfg`: list of strings, each emitted as `-fw_cfg <value>`.
+  - `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`.
+    When present, the QEMU command is built from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`).
+    All fields except `machine` are passed verbatim; `machine` is normalized so `smm=off` and `pic=off` are present even when omitted.
+    When absent, the tool falls back to the Canonical direct-boot args (see Canonical's [`boot_direct.sh`](https://github.com/canonical/tdx/blob/a599cf54510ec81667cedfb183e4da9f96be536d/guest-tools/direct-boot/boot_direct.sh#L54-L68)). If your TD configuration does not match Canonical's, you need to provide the QEMU shape matching your TD configuration, otherwise the tool's `RTMR[0]` prediction will not match the value measured by a real TD.
+    Fields:
+    - `machine` *(required when block is present)*: value passed to `-machine`, with `smm=off` and `pic=off` appended when omitted. When duplicates exist, QEMU last-wins semantics apply: only the final value of each flag is checked, so `smm=on,smm=off` is accepted (effective value `off`) while `smm=off,smm=on` is rejected (effective value `on`). Example: `"q35,kernel_irqchip=split,memory-backend=mem0"`.
+    - `cpu` *(optional, default `"host"`)*: value passed verbatim to `-cpu`. Use a named model with an explicit `phys-bits=N` (e.g. `"Skylake-Server,phys-bits=46"`) to make the run independent of the host CPU.
+    - `accel` *(optional, default `"kvm"`)*: value passed verbatim to `-accel`. Use `"tcg"` to skip KVM (CI runners without `/dev/kvm`, ARM hosts via x86 emulation, …).
+    - `globals`: list of strings, each emitted as `-global <value>`.
+    - `objects`: list of strings, each emitted as `-object <value>`.
+    - `netdevs`: list of strings, each emitted as `-netdev <value>`.
+    - `devices`: list of strings, each emitted as `-device <value>`. **Order is part of the API contract**: QEMU's PCI auto-slot assignment iterates `-device` arguments in command-line order and picks the lowest free slot, so `devices` must be authored in the same order as the reference launch you are mirroring. A `slot=N` argument on a `pcie-root-port` is only a hint and shifts if the slot is already taken by an earlier auto-assigned device. Order within `globals` / `objects` / `netdevs` / `fw_cfg` does not influence the ACPI tables.
+    - `fw_cfg`: list of strings, each emitted as `-fw_cfg <value>`.
 
 - `direct`: Direct boot specific configuration used to compute RTMR[1] and RTMR[2]
   - `kernel`: Path to file (e.g., `vmlinuz`) of kernel image, which will be directly loaded and executed by OVMF.
