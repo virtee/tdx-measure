@@ -102,6 +102,9 @@ jobs:
         key: ovmf-fd-${{ hashFiles('tests/fetch_ovmf.sh') }}
     - name: Fetch OVMF.fd
       run: ./tests/fetch_ovmf.sh
+    - name: Build CLI (release)
+      # tests/cli.rs spawns target/release/tdx-measure, which `cargo test` does not build.
+      run: cargo build --release
     - name: Run unit + integration tests
       run: cargo test --release
 

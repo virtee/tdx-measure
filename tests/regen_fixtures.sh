@@ -65,7 +65,8 @@ for dir in "$fixtures"/*/; do
 
     if ! "$tdx_measure" "$dir/metadata.json" \
             --platform-only --direct-boot true \
-            --create-acpi-tables "$distro" >/dev/null; then
+            --distribution "$distro" \
+            --create-acpi-tables >/dev/null; then
         echo "FAIL $name: --create-acpi-tables failed"
         fail+=1
         continue
