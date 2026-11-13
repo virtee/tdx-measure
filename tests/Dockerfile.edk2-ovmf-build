@@ -1,0 +1,118 @@
+# Copyright (c) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+# Builds a non-secure-boot Intel TDX OVMF from an upstream edk2 git tag (e.g. edk2-stable202502).
+# Patches with Ubuntu's edk2 Debian patches for compatibility with older EDK2 tags on current GCC toolchains.
+# See tests/fetch_ovmf.sh for the driver script.
+# Multi-stage: builder stage's full edk2 checkout (with submodules) is several GB; only final OVMF.fd is kept.
+
+# ubuntu:26.04
+ARG DISTRIBUTION=ubuntu@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b
+FROM ${DISTRIBUTION} AS builder
+
+SHELL ["/bin/bash", "-c"]
+
+# Immutable Ubuntu archive snapshot supplying the build toolchain.
+ARG UBUNTU_SNAPSHOT=20260903T000000Z
+# Upstream edk2 release tag, retained for build logs and patch selection.
+ARG EDK2_VERSION
+# Immutable commit for EDK2_VERSION.
+ARG EDK2_COMMIT
+# Ubuntu edk2 source package version supplying the Debian patches applied on top of EDK2_VERSION.
+ARG DEBIAN_PATCH_VERSION=2025.11-3ubuntu7
+# sha256 of the above package's .debian.tar.xz, verified before extracting.
+ARG DEBIAN_PATCH_SHA256=543fb34c9be9b4a2846dc76d59657f7d47469bf42adf6e0801c95714791b9cfe
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# The snapshot CDN intermittently returns transient 5xx errors; retry each failed fetch instead of failing the whole build.
+RUN echo 'Acquire::Retries "5"; Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/80-retries
+
+# Bootstrap CA certificates before switching package installation to the HTTPS snapshot archive.
+# apt's own retries fire back-to-back with no delay, which isn't enough for a sustained CDN outage.
+# Re-running the (idempotent) apt-get command after a real sleep gives the CDN time to recover.
+RUN retry() { for i in 1 2 3 4 5 6 7 8; do "$@" && return 0; echo "retrying in 30s ($i/8): $*" >&2; sleep 30; done; return 1; }; \
+    retry apt-get update && \
+    retry apt-get install --no-install-recommends --yes ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu/|https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/|" \
+        -e "s|http://security.ubuntu.com/ubuntu/|https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/|" \
+        /etc/apt/sources.list.d/ubuntu.sources && \
+    retry apt-get update && \
+    retry apt-get install --no-install-recommends --yes \
+        build-essential \
+        git \
+        iasl \
+        nasm \
+        python-is-python3 \
+        python3 \
+        uuid-dev \
+        wget \
+        xz-utils && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -m -s /sbin/nologin edk2-builder && \
+    mkdir -p /root && \
+    chown -R edk2-builder:edk2-builder /root
+
+# Build as an unprivileged user because EDK2 creates generated files in its source tree.
+WORKDIR /root
+USER edk2-builder
+RUN test -n "$EDK2_VERSION" || { echo "EDK2_VERSION build-arg is required" >&2; exit 1; } && \
+    test -n "$EDK2_COMMIT" || { echo "EDK2_COMMIT build-arg is required" >&2; exit 1; }
+
+# Clone the release tag, then verify it still resolves to EDK2_COMMIT because a release tag can be retargeted after this Dockerfile is published.
+RUN git clone --branch "$EDK2_VERSION" --depth 1 https://github.com/tianocore/edk2.git
+
+WORKDIR /root/edk2
+
+RUN actual_commit="$(git rev-parse HEAD)" && \
+    if [[ "$actual_commit" != "$EDK2_COMMIT" ]]; then \
+        echo "EDK2_VERSION $EDK2_VERSION resolved to $actual_commit, expected $EDK2_COMMIT (tag may have been retargeted)" >&2; \
+        exit 1; \
+    fi
+
+# The pinned superproject commit determines the exact submodule revisions.
+RUN git submodule update --init --recursive --depth 1
+
+# Debian's build-fix patches for a current GCC toolchain.
+RUN wget -qO edk2.debian.tar.xz "https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/pool/main/e/edk2/edk2_${DEBIAN_PATCH_VERSION}.debian.tar.xz" && \
+    echo "${DEBIAN_PATCH_SHA256}  edk2.debian.tar.xz" | sha256sum -c - && \
+    tar -xJf edk2.debian.tar.xz debian/patches/ && \
+    rm edk2.debian.tar.xz && \
+    for p in x64-baseline-abi.patch fix_nasm_compile.patch 0006-BaseTools-EfiRom-fix-compiler-warning.patch; do \
+        [[ -f "debian/patches/$p" ]] || continue; \
+        if git apply --check "debian/patches/$p" 2>/dev/null; then \
+            git apply "debian/patches/$p" && echo "applied $p"; \
+        else \
+            echo "skipping $p (does not apply to $EDK2_VERSION)"; \
+        fi; \
+    done
+
+# BaseTools provides the EDK2 build utilities used by the platform build.
+RUN make -C BaseTools
+
+# Build the Intel TDX release firmware with the feature set used by the fixture measurements.
+RUN source edksetup.sh && \
+    build -p OvmfPkg/IntelTdx/IntelTdxX64.dsc -a X64 -t GCC5 -b RELEASE \
+      -DCC_MEASUREMENT_ENABLE=TRUE \
+      -DNETWORK_HTTP_BOOT_ENABLE=TRUE \
+      -DNETWORK_IP6_ENABLE=TRUE \
+      -DNETWORK_TLS_ENABLE \
+      -DTPM2_ENABLE=TRUE \
+      -DFD_SIZE_4MB \
+      -DBUILD_SHELL=FALSE \
+      -DSECURE_BOOT_ENABLE=FALSE \
+      -DSMM_REQUIRE=FALSE
+
+# Export only the firmware artifact so the final image does not contain build tools or source code.
+# busybox:1.36.1
+FROM busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+COPY --from=builder /root/edk2/Build/IntelTdx/RELEASE_GCC5/FV/OVMF.fd /OVMF.fd
+
+# Copies the built firmware to the bind-mounted /output volume on `docker run`.
+ENTRYPOINT ["cp", "-f", "/OVMF.fd", "/output/OVMF.fd"]
+
+# Verify that the exported firmware is present when the image is checked.
+HEALTHCHECK CMD test -f /OVMF.fd
