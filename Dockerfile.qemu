@@ -2,45 +2,66 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ARG DISTRIBUTION=ubuntu:25.04
-FROM ${DISTRIBUTION}
+FROM ${DISTRIBUTION} AS fetcher
 
 # QEMU_SOURCE selects how the source tarball is fetched:
 #   "ppa"  -> pull-ppa-source from ppa:kobuk-team/tdx-release (Intel TDX QEMU build for 24.04/25.04)
 #   "main" -> pull-lp-source from the distribution's main archive
 ARG QEMU_SOURCE=ppa
 ARG QEMU_VERSION=
-ARG ACPI_TABLES_NAME
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Only the tooling needed to fetch the source package and read its changelog version.
+# The heavier build toolchain is installed later, in the "builder" stage, so resolving the QEMU version does not require setting up the whole build environment first.
 RUN apt-get update && \
     apt-get install --no-install-recommends --yes \
-        build-essential \
-        git \
-        ubuntu-dev-tools \
-        libglib2.0-dev \
-        meson \
-        ninja-build \
-        python3-venv && \
+        lsb-release \
+        ubuntu-dev-tools && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 ARG QEMU_PPA=ppa:kobuk-team/tdx-release
 
 WORKDIR /
-RUN if [ "$QEMU_SOURCE" = "ppa" ]; then \
-        pull-ppa-source --ppa ${QEMU_PPA} qemu ${QEMU_VERSION}; \
+# Set to a unique value by the tool whenever QEMU_VERSION is empty, so the fetch below cannot reuse a cached layer holding a stale archive tip.
+# Left empty for pinned versions, whose fetch layers remain cacheable.
+ARG QEMU_FETCH_NONCE=
+# Without an explicit QEMU_VERSION, fetch the latest package for the base image's release rather than the fetchers' default of Ubuntu's development series.
+RUN echo "QEMU fetch nonce: ${QEMU_FETCH_NONCE:-none}" && \
+    QEMU_TARGET="${QEMU_VERSION:-$(lsb_release -cs)}" && \
+    if [ "$QEMU_SOURCE" = "ppa" ]; then \
+        pull-ppa-source --ppa ${QEMU_PPA} qemu "$QEMU_TARGET"; \
     elif [ "$QEMU_SOURCE" = "main" ]; then \
-        pull-lp-source qemu ${QEMU_VERSION}; \
+        pull-lp-source qemu "$QEMU_TARGET"; \
     else \
         echo "Unknown QEMU_SOURCE: $QEMU_SOURCE"; exit 1; \
     fi
 
 RUN QEMU_WRK_DIR=$(find / -maxdepth 1 -type d -name "qemu*" | head -n 1) && \
     echo "Found QEMU directory: $QEMU_WRK_DIR" && \
-    ln -s "$QEMU_WRK_DIR" /qemu-source && \
+    dpkg-parsechangelog -l "$QEMU_WRK_DIR/debian/changelog" -S Version > /qemu-version.txt && \
+    ln -s "$QEMU_WRK_DIR" /qemu-source
+
+CMD ["cat", "/qemu-version.txt"]
+
+FROM fetcher AS builder
+
+ARG ACPI_TABLES_NAME
+
+RUN apt-get update && \
+    apt-get install --no-install-recommends --yes \
+        build-essential \
+        git \
+        libglib2.0-dev \
+        meson \
+        ninja-build \
+        python3-pycotap \
+        python3-venv && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
     useradd -m -s /sbin/nologin qemu-user && \
-    chown -R qemu-user:qemu-user "$QEMU_WRK_DIR"
+    chown -R qemu-user:qemu-user "$(readlink -f /qemu-source)"
 
 WORKDIR /qemu-source
 

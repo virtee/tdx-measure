@@ -193,7 +193,7 @@ This requires a working `docker` (with buildx) and, when `accel: "kvm"` is in ef
 The three parameters that control QEMU — version (`--qemu-version`), package source (`--qemu-source`), and base OCI image (`--qemu-base-image`) — can be supplied in one of three ways:
 
 - **Distribution only** (`--distribution`): all three values are resolved from a known-good pin for the given distribution (`1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2` for `ubuntu:25.04`, `1:10.2.1+ds-1ubuntu4` for `ubuntu:26.04`), so the same metadata and CLI flags always produce the same ACPI bytes regardless of when the run happens.
-- **Distribution with overrides**: `--distribution` sets the defaults and individual flags (`--qemu-version`, `--qemu-source`, `--qemu-base-image`) override specific values — useful, for example, to validate a Stable Release Update (a post-release Ubuntu bug-fix package) or to fetch the current main-archive tip by passing `""` for `--qemu-version`.
+- **Distribution with overrides**: `--distribution` sets the defaults and individual flags (`--qemu-version`, `--qemu-source`, `--qemu-base-image`) override specific values — useful, for example, to validate a Stable Release Update (a post-release Ubuntu bug-fix package) or to fetch the latest QEMU published for the base image's release (e.g., `resolute` for `ubuntu:26.04`) by passing `""` for `--qemu-version`.
 - **Explicit parameters only**: omit `--distribution` and supply `--qemu-source` and `--qemu-base-image` directly; in this case `--qemu-version` is also available but optional.
 
 The following examples illustrate the common invocation patterns:
@@ -205,7 +205,7 @@ The following examples illustrate the common invocation patterns:
 # Override with an explicit QEMU version:
 --distribution ubuntu:26.04 --create-acpi-tables --qemu-version '1:10.2.1+ds-1ubuntu5'
 
-# Fetch current main-archive tip:
+# Fetch the latest QEMU for the distribution's release:
 --distribution ubuntu:26.04 --create-acpi-tables --qemu-version ""
 
 # Without --distribution, provide explicit QEMU parameters:

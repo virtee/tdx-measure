@@ -130,7 +130,6 @@ fn measure_platform_matches_expected_json_for_every_fixture() {
             .direct_boot(true)
             .metadata_path(&metadata_path)
             .create_acpi_table(false)
-            .distribution("")
             .ovmf_version(ovmf_version)
             .build();
 

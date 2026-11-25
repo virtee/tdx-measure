@@ -8,7 +8,8 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
-pub use machine::{Machine, QemuInfo};
+pub use docker::{resolve_qemu_archive_version, QemuPkg};
+pub use machine::Machine;
 pub use tdvf::{
     direct_boot_boot_order_bytes, direct_boot_boot_variable_payloads,
     ovmf_exposes_smbios_measurement,
@@ -17,6 +18,7 @@ pub use tdvf::{
 use util::{measure_log, measure_sha384};
 
 mod acpi;
+mod docker;
 mod image;
 mod kernel;
 mod machine;
@@ -36,6 +38,16 @@ pub const OVMF_SMBIOS_VERSION: (u16, u8) = (2025, 5);
 
 /// The upstream release that changed initrd command-line ordering.
 pub const OVMF_INITRD_PREFIX_VERSION: (u16, u8) = (2025, 8);
+
+/// The QEMU major version that stopped patching the kernel header during direct boot.
+pub const QEMU_NO_KERNEL_PATCH_VERSION: u32 = 10;
+
+/// Parses a QEMU package version string into its major version number.
+pub fn parse_qemu_version(version: &str) -> Option<u32> {
+    // Strip a Debian epoch prefix (e.g. "1:10.2.1+ds-1ubuntu4" -> "10.2.1+ds-1ubuntu4").
+    let ver = version.split(':').next_back().unwrap_or(version);
+    ver.split('.').next()?.parse().ok()
+}
 
 /// Package metadata for a single supported distribution.
 pub struct DistributionDef {
@@ -485,5 +497,37 @@ mod tests {
             r#"{"cpus":2,"memory":"4G","bios":"OVMF.fd","acpi_tables":"acpi.bin","smbios":"smbios_tables.bin"}"#,
         ).expect("deserialize with smbios");
         assert_eq!(with.smbios.as_deref(), Some("smbios_tables.bin"));
+    }
+    #[test]
+    fn parses_qemu_versions_with_epoch() {
+        assert_eq!(
+            parse_qemu_version("1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2"),
+            Some(9)
+        );
+        assert_eq!(parse_qemu_version("1:10.2.1+ds-1ubuntu4"), Some(10));
+    }
+
+    #[test]
+    fn parses_plain_qemu_versions() {
+        assert_eq!(parse_qemu_version("9.2.1"), Some(9));
+        assert_eq!(parse_qemu_version("10.0"), Some(10));
+    }
+
+    #[test]
+    fn rejects_unparseable_qemu_versions() {
+        assert_eq!(parse_qemu_version("unknown"), None);
+        assert_eq!(parse_qemu_version(""), None);
+    }
+
+    #[test]
+    fn every_distribution_default_qemu_version_is_parseable() {
+        for name in SUPPORTED_DISTRIBUTIONS.names() {
+            let def = SUPPORTED_DISTRIBUTIONS.find(name).unwrap();
+            assert!(
+                parse_qemu_version(def.qemu_default_version).is_some(),
+                "default QEMU version '{}' for {name} is not parseable",
+                def.qemu_default_version
+            );
+        }
     }
 }
