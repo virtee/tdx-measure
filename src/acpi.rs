@@ -67,11 +67,12 @@ impl Machine<'_> {
     }
 }
 
+/// `(signature, offset, csum_offset, length)` where `csum_offset` is the byte offset of the table's `Checksum` field (header offset 9).
+type AcpiTableEntry = ([u8; 4], u32, u32, u32);
+
 /// Walks the concatenated ACPI tables blob exposed by QEMU via `etc/acpi/tables`
 /// and returns one entry per System Description Table found in it, in file order.
-/// Each tuple is `(signature, offset, csum_offset, length)` where `csum_offset`
-/// is the byte offset of the table's `Checksum` field (header offset 9).
-fn list_acpi_tables(tables: &[u8]) -> Result<Vec<([u8; 4], u32, u32, u32)>> {
+fn list_acpi_tables(tables: &[u8]) -> Result<Vec<AcpiTableEntry>> {
     let mut out = Vec::new();
     let mut off = 0usize;
     while off + 8 <= tables.len() {
@@ -168,7 +169,7 @@ fn derive_table_loader(tables: &[u8]) -> Result<Vec<u8>> {
     }
     // RSDT lists every non-DSDT table; emit one 4-byte AddPtr per entry slot.
     const RSDT_HEADER_LEN: u32 = 36;
-    if rsdt_len < RSDT_HEADER_LEN || (rsdt_len - RSDT_HEADER_LEN) % 4 != 0 {
+    if rsdt_len < RSDT_HEADER_LEN || !(rsdt_len - RSDT_HEADER_LEN).is_multiple_of(4) {
         bail!("Malformed RSDT length: {rsdt_len}");
     }
     let rsdt_entries = (rsdt_len - RSDT_HEADER_LEN) / 4;
@@ -630,8 +631,11 @@ mod tests {
     fn split_cmds(loader: &[u8]) -> Vec<&[u8]> {
         assert!(loader.len() >= LDR_LENGTH);
         loader
-            .chunks_exact(128)
+            .as_chunks::<128>()
+            .0
+            .iter()
             .take_while(|chunk| u32::from_le_bytes(chunk[0..4].try_into().unwrap()) != 0)
+            .map(|chunk| chunk.as_slice())
             .collect()
     }
 

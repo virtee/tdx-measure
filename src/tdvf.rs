@@ -274,13 +274,13 @@ impl<'a> Tdvf<'a> {
                 attributes: u32::from_le_bytes(sec_data[28..32].try_into().unwrap()),
             };
 
-            if s.memory_address % PAGE_SIZE != 0 {
+            if !s.memory_address.is_multiple_of(PAGE_SIZE) {
                 bail!("Failed to parse TDVF metadata: Section memory address not aligned");
             }
             if s.memory_data_size < s.raw_data_size as u64 {
                 bail!("Failed to parse TDVF metadata: Section memory data size less than raw");
             }
-            if s.memory_data_size % PAGE_SIZE != 0 {
+            if !s.memory_data_size.is_multiple_of(PAGE_SIZE) {
                 bail!("Failed to parse TDVF metadata: Section memory data size not aligned");
             }
             if s.attributes & ATTRIBUTE_MR_EXTEND != 0

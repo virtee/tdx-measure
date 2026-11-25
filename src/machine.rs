@@ -49,11 +49,8 @@ impl Machine<'_> {
         let mrtd = tdvf.mrtd().context("Failed to compute MR TD")?;
         let rtmr0 = tdvf.rtmr0(self).context("Failed to compute RTMR0")?;
 
-        let rtmr1;
-        let rtmr2;
-
         // Direct boot
-        if self.direct_boot {
+        let (rtmr1, rtmr2) = if self.direct_boot {
             let kernel_path = self
                 .kernel
                 .ok_or_else(|| anyhow::anyhow!("Kernel path required for direct boot"))?;
@@ -68,14 +65,16 @@ impl Machine<'_> {
             let qemu_major = self.qemu_major.ok_or_else(|| {
                 anyhow::anyhow!("QEMU major version required for direct boot RTMR1 measurement")
             })?;
-            rtmr1 = kernel::measure_rtmr1_direct(
-                kernel_path,
-                initrd_path,
-                self.memory_size,
-                0x28000,
-                qemu_major,
-            )?;
-            rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline, ovmf_version)?;
+            (
+                kernel::measure_rtmr1_direct(
+                    kernel_path,
+                    initrd_path,
+                    self.memory_size,
+                    0x28000,
+                    qemu_major,
+                )?,
+                kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline, ovmf_version)?,
+            )
         } else {
             // Indirect boot
             let qcow2_path = self
@@ -91,15 +90,17 @@ impl Machine<'_> {
                 .mok_list_x
                 .ok_or_else(|| anyhow::anyhow!("MOK list X path required for indirect boot"))?;
 
-            rtmr1 = image::measure_rtmr1_from_qcow2(qcow2_path)?;
-            rtmr2 = image::measure_rtmr2_from_qcow2(
-                qcow2_path,
-                self.kernel_cmdline,
-                mok_list_path,
-                mok_list_trusted_path,
-                mok_list_x_path,
-            )?;
-        }
+            (
+                image::measure_rtmr1_from_qcow2(qcow2_path)?,
+                image::measure_rtmr2_from_qcow2(
+                    qcow2_path,
+                    self.kernel_cmdline,
+                    mok_list_path,
+                    mok_list_trusted_path,
+                    mok_list_x_path,
+                )?,
+            )
+        };
 
         Ok(TdxMeasurements {
             mrtd,
@@ -124,11 +125,8 @@ impl Machine<'_> {
     }
 
     pub fn measure_runtime(&self) -> Result<TdxMeasurements> {
-        let rtmr1;
-        let rtmr2;
-
         // Direct boot
-        if self.direct_boot {
+        let (rtmr1, rtmr2) = if self.direct_boot {
             let kernel_path = self
                 .kernel
                 .ok_or_else(|| anyhow::anyhow!("Kernel path required for direct boot"))?;
@@ -143,15 +141,17 @@ impl Machine<'_> {
             let qemu_major = self.qemu_major.ok_or_else(|| {
                 anyhow::anyhow!("QEMU major version required for direct boot RTMR1 measurement")
             })?;
-            // WARN : Carefull, when measuring the runtime only, we only compute the measurement for memory size > 0xb0000000
-            rtmr1 = kernel::measure_rtmr1_direct(
-                kernel_path,
-                initrd_path,
-                0xb0000000,
-                0x28000,
-                qemu_major,
-            )?;
-            rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline, ovmf_version)?;
+            // WARN : Careful, when measuring the runtime only, we only compute the measurement for memory size > 0xb0000000
+            (
+                kernel::measure_rtmr1_direct(
+                    kernel_path,
+                    initrd_path,
+                    0xb0000000,
+                    0x28000,
+                    qemu_major,
+                )?,
+                kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline, ovmf_version)?,
+            )
         } else {
             // Indirect boot
             let qcow2_path = self
@@ -167,15 +167,17 @@ impl Machine<'_> {
                 .mok_list_x
                 .ok_or_else(|| anyhow::anyhow!("MOK list X path required for indirect boot"))?;
 
-            rtmr1 = image::measure_rtmr1_from_qcow2(qcow2_path)?;
-            rtmr2 = image::measure_rtmr2_from_qcow2(
-                qcow2_path,
-                self.kernel_cmdline,
-                mok_list_path,
-                mok_list_trusted_path,
-                mok_list_x_path,
-            )?;
-        }
+            (
+                image::measure_rtmr1_from_qcow2(qcow2_path)?,
+                image::measure_rtmr2_from_qcow2(
+                    qcow2_path,
+                    self.kernel_cmdline,
+                    mok_list_path,
+                    mok_list_trusted_path,
+                    mok_list_x_path,
+                )?,
+            )
+        };
 
         Ok(TdxMeasurements {
             mrtd: vec![],
