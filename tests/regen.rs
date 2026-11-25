@@ -101,7 +101,7 @@ fn create_acpi_tables_reproduces_each_fixture_byte_for_byte() {
         let status = Command::new(&cli)
             .arg(fixture.join("metadata.json"))
             .args(["--platform-only", "--direct-boot", "true"])
-            .args(["--create-acpi-tables", distro])
+            .args(["--distribution", distro, "--create-acpi-tables"])
             .status();
 
         // Always restore the captured copy, even on error.

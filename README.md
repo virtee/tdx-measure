@@ -27,11 +27,21 @@ This project is a fork of dstack-mr from the [Dstack-TEE/dstack](https://github.
       --platform-only                       Compute MRTD and RTMR0 only
       --runtime-only                        Compute RTMR1 and RTMR2 only
       --transcript <TRANSCRIPT>             Generate a human-readable transcript of all metadata files and write to the specified file
-      --create-acpi-tables <DISTRIBUTION> [<QEMU_VERSION>]
-                                            Generate ACPI tables for direct boot mode. Only valid with direct boot.
-                                            <DISTRIBUTION> in {ubuntu:25.04, ubuntu:26.04}.
-                                            <QEMU_VERSION> overrides the pinned QEMU source-package version for the given distribution
-                                            (pass `""` to fetch the current main-archive tip).
+      --distribution <DISTRIBUTION>         Set distribution, which brings default QEMU version, QEMU source, QEMU base image, and OVMF versions.
+      --qemu-version <QEMU_VERSION>         If provided with --distribution, overwrite distribution default.
+                                            Without --distribution, set the QEMU version.
+      --qemu-source <QEMU_SOURCE>           If provided with --distribution, overwrite distribution default.
+                                            Without --distribution, set the QEMU source.
+                                            QEMU package source: main | ppa:<OWNER>/<NAME>
+                                            Must be paired with --qemu-base-image
+      --qemu-base-image <QEMU_BASE_IMAGE>   If provided with --distribution, overwrite distribution default.
+                                            Without --distribution, set the QEMU base OCI image.
+                                            Full reference including digest, e.g. ubuntu:26.04@sha256:...
+                                            Must be paired with --qemu-source
+      --ovmf-version <OVMF_VERSION>         Select or override the OVMF version (accepted: edk2-stableYYYYMM or YYYY.MM-NubuntuN[.N])
+      --create-acpi-tables                  Dynamically generate ACPI tables.
+                                            Only valid with direct boot
+                                            Requires --distribution or both --qemu-source and --qemu-base-image.
   -h, --help                                Print help
   -V, --version                             Print version
 ```
@@ -172,21 +182,29 @@ These are calculated by the tool automatically.
 
 #### Generating ACPI tables
 
-When `--create-acpi-tables` is passed, the tool builds a small Docker image that
-patches QEMU to dump `etc/acpi/tables` and exits before TD entry. This requires
-a working `docker` (with buildx) and, when `accel: "kvm"` is in effect, KVM on
-the host. Each supported distribution pins a known-good QEMU source version
-(`1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2` for `ubuntu:25.04`, `1:10.2.1+ds-1ubuntu4`
-for `ubuntu:26.04`) so the same metadata + CLI produces the same ACPI bytes
-regardless of when the regen runs. Pass an explicit version as the second
-positional value of `--create-acpi-tables` to override the pin (e.g. to validate
-an SRU), or `""` to opt into whatever `pull-lp-source` currently picks from the
-main archive:
+When `--create-acpi-tables` is passed, the tool builds a small Docker image that patches QEMU to dump `etc/acpi/tables` and exits before TD entry.
+This requires a working `docker` (with buildx) and, when `accel: "kvm"` is in effect, KVM on the host.
+
+The three parameters that control QEMU — version (`--qemu-version`), package source (`--qemu-source`), and base OCI image (`--qemu-base-image`) — can be supplied in one of three ways:
+
+- **Distribution only** (`--distribution`): all three values are resolved from a known-good pin for the given distribution (`1:9.2.1+ds-1ubuntu4+tdx2.0~ppa2` for `ubuntu:25.04`, `1:10.2.1+ds-1ubuntu4` for `ubuntu:26.04`), so the same metadata and CLI flags always produce the same ACPI bytes regardless of when the run happens.
+- **Distribution with overrides**: `--distribution` sets the defaults and individual flags (`--qemu-version`, `--qemu-source`, `--qemu-base-image`) override specific values — useful, for example, to validate a Stable Release Update (a post-release Ubuntu bug-fix package) or to fetch the current main-archive tip by passing `""` for `--qemu-version`.
+- **Explicit parameters only**: omit `--distribution` and supply `--qemu-source` and `--qemu-base-image` directly; in this case `--qemu-version` is also available but optional.
+
+The following examples illustrate the common invocation patterns:
 
 ```
---create-acpi-tables ubuntu:26.04                              # default pin
---create-acpi-tables ubuntu:26.04 1:10.2.1+ds-1ubuntu5         # explicit version
---create-acpi-tables ubuntu:26.04 ""                           # current main-archive tip
+# Use distribution's pinned QEMU version (default):
+--distribution ubuntu:26.04 --create-acpi-tables
+
+# Override with an explicit QEMU version:
+--distribution ubuntu:26.04 --create-acpi-tables --qemu-version '1:10.2.1+ds-1ubuntu5'
+
+# Fetch current main-archive tip:
+--distribution ubuntu:26.04 --create-acpi-tables --qemu-version ""
+
+# Without --distribution, provide explicit QEMU parameters:
+--qemu-source main --qemu-base-image 'ubuntu:26.04@sha256:...' --create-acpi-tables
 ```
 
 ### Indirect Boot
