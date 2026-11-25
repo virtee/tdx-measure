@@ -45,10 +45,7 @@ struct Expected {
     rtmr0: String,
 }
 
-/// Reads metadata.json, resolves the BIOS reference against `ovmf_path()`
-/// instead of the path in the json (so the test doesn't need to bake the
-/// absolute repo path into the checked-in fixture), and builds a Machine the
-/// caller can `measure_platform()` on.
+/// Reads metadata.json and returns the parsed config plus its path, for the caller to resolve fixture-relative fields and build a Machine to `measure_platform()` on.
 fn machine_for(fixture: &Path) -> (ImageConfig, PathBuf) {
     let raw = std::fs::read_to_string(fixture.join("metadata.json")).expect("read metadata.json");
     let cfg: ImageConfig = serde_json::from_str(&raw).expect("parse metadata.json");
@@ -56,7 +53,7 @@ fn machine_for(fixture: &Path) -> (ImageConfig, PathBuf) {
 }
 
 #[test]
-fn ovmf_present() {
+fn shared_ovmf_present() {
     assert!(
         ovmf_path().is_file(),
         "tests/fixtures/OVMF.fd missing — run `tests/fetch_ovmf.sh`"
@@ -75,18 +72,26 @@ fn measure_platform_matches_expected_json_for_every_fixture() {
         let (cfg, metadata_path) = machine_for(&fixture);
         let bc = cfg.boot_config.as_ref().expect("boot_config required");
 
-        // Resolve fixture-relative paths the same way the CLI does, but pin
-        // the BIOS to the shared OVMF.fd so the fixture is host-independent.
+        // Resolve fixture-relative paths the same way the CLI does, so fixtures shipping their own OVMF.fd are measured against the firmware they declare.
         let parent = metadata_path.parent().unwrap();
-        let acpi = parent.join(&bc.acpi_tables).display().to_string();
-        let bios = ovmf_path().display().to_string();
+        let acpi = parent.join(&bc.acpi_tables);
+        let bios = parent.join(&bc.bios);
 
+        if !bios.is_file() {
+            panic!(
+                "firmware file missing for {name}: {} — run `tests/fetch_ovmf.sh`",
+                bios.display()
+            );
+        }
+
+        let bios_str = bios.display().to_string();
+        let acpi_str = acpi.display().to_string();
         let machine = Machine::builder()
             .cpu_count(bc.cpus)
             .memory_size(cfg.memory_size().expect("memory_size"))
-            .firmware(bios.as_str())
+            .firmware(bios_str.as_str())
             .kernel_cmdline("")
-            .acpi_tables(acpi.as_str())
+            .acpi_tables(acpi_str.as_str())
             .rsdp("")
             .table_loader("")
             .boot_order("")

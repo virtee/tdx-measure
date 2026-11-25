@@ -90,9 +90,9 @@ fn create_acpi_tables_reproduces_each_fixture_byte_for_byte() {
         let stash = fixture.join("acpi_tables.bin.stash");
         std::fs::rename(&captured, &stash).expect("stash captured bytes");
 
-        // Each fixture has been tested against ubuntu:25.04 (Canonical fallback)
-        // or ubuntu:26.04 (qemu block). Pick by inspecting the metadata.
-        let distro = if accel == "kvm" {
+        // `canonical-defaults` is tested against ubuntu:25.04 (Canonical fallback).
+        // Every other fixture is tested against ubuntu:26.04 (qemu block).
+        let distro = if name == "canonical-defaults" {
             "ubuntu:25.04"
         } else {
             "ubuntu:26.04"
