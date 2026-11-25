@@ -148,6 +148,7 @@ Create `metadata.json` file with the below metadata:
   - `smbios` *(optional)*: Path to file (e.g., `smbios_tables.bin`) containing the SMBIOS table, which describes the platform's hardware and firmware inventory.
     The file can be extracted by running the [`extract_config_files.py`](extract_config_files.py) script inside a TD, which is configured identically to the target configuration.
     Required from OVMF 2025.05 onwards, since that release measures the SMBIOS table into `RTMR[0]`; without it, the tool's `RTMR[0]` prediction will not match for those OVMF versions.
+    With `-cpu host`, the SMBIOS processor information (type 4) contains the host CPU signature, which is measured. Extract the file on a host with the same CPU model as the target, or pin the value with QEMU's `-smbios type=4,processor-id=...` option on both.
   - `qemu` *(optional)*: Generic QEMU shape descriptor consumed by `--create-acpi-tables`.
     When present, the QEMU command is built from this block plus a minimal set of measurement-related core flags (`-smp ... -m ... -bios ... -nodefaults -vga none -nographic -no-reboot`).
     All fields except `machine` are passed verbatim; `machine` is normalized so `smm=off` and `pic=off` are present even when omitted.

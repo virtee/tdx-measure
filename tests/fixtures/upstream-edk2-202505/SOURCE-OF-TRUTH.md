@@ -39,6 +39,15 @@ The script verifies the built firmware against a pinned SHA-256 digest and reuse
 
 The ACPI and SMBIOS table fixtures were captured from an Ubuntu 26.04 Server TDX guest with 32 vCPUs and 16 GiB RAM, using KVM acceleration and host CPU passthrough.
 
+### Host CPU
+
+The capture host was a 4th Gen Intel Xeon Scalable (Sapphire Rapids) system.
+With `-cpu host`, QEMU copies the host CPU signature into the SMBIOS type 4 `ProcessorId` field, which is `0x1fa9fbff000806f8` (CPUID signature `0x806F8`) in the committed `smbios_tables.bin`.
+OVMF does not blank `ProcessorId` before measuring SMBIOS into RTMR0, so the expected RTMR0 depends on the host CPU model.
+
+A capture on a different CPU model (for example Granite Rapids) produces a different `smbios_tables.bin` and RTMR0.
+To reproduce this fixture on such a host, add `-smbios type=4,processor-id=0x1fa9fbff000806f8` to the QEMU command below; with it, the TD reports the MRTD and RTMR0 in `expected.json`.
+
 ### Firmware and guest images
 
 - Firmware: `OVMF-edk2-stable202505.fd`, built locally by `tests/fetch_ovmf.sh` as described above, rather than included in the repository.
