@@ -14,6 +14,11 @@ use crate::{Machine, OVMF_BOOT_EVENTS_VERSION};
 const PAGE_SIZE: u64 = 0x1000;
 const MR_EXTEND_GRANULARITY: usize = 0x100;
 
+/// QEMU fw_cfg BootMenu value: little-endian UINT16 = 0 (boot menu disabled).
+const FW_CFG_BOOT_MENU_DISABLED: [u8; 2] = [0x00, 0x00];
+/// QEMU fw_cfg bootorder content for direct boot via linuxboot_dma.
+const FW_CFG_BOOTORDER: &[u8] = b"/rom@genroms/linuxboot_dma.bin\0";
+
 const ATTRIBUTE_MR_EXTEND: u32 = 0x00000001;
 const ATTRIBUTE_PAGE_AUG: u32 = 0x00000002;
 
@@ -91,6 +96,11 @@ fn measure_tdx_efi_variable(
 /// OVMF releases before upstream 2025.05 register one boot entry, while 2025.05 and later register two.
 fn ovmf_exposes_single_boot_entry(ovmf_version: Option<(u16, u8)>) -> bool {
     !matches!(ovmf_version, Some(v) if v >= OVMF_BOOT_EVENTS_VERSION)
+}
+
+/// OVMF releases from upstream 2025.05 onward measure the fw_cfg BootMenu and bootorder items into RTMR0.
+fn ovmf_exposes_fw_cfg_measurement(ovmf_version: Option<(u16, u8)>) -> bool {
+    matches!(ovmf_version, Some(version) if version >= crate::OVMF_FW_CFG_VERSION)
 }
 
 /// Returns the BootOrder variable bytes OVMF creates for direct boot.
@@ -317,9 +327,17 @@ impl<'a> Tdvf<'a> {
         let (boot_order_data, boot_entries) = parse_boot_order(machine)?;
 
         // Compute RTMR0 log
-        let mut rtmr0_log = vec![
-            td_hob_hash,
-            cfv_hash,
+        let mut rtmr0_log = vec![td_hob_hash, cfv_hash];
+
+        if ovmf_exposes_fw_cfg_measurement(machine.ovmf_version) {
+            rtmr0_log.push(measure_sha384(&FW_CFG_BOOT_MENU_DISABLED));
+
+            if machine.direct_boot {
+                rtmr0_log.push(measure_sha384(FW_CFG_BOOTORDER));
+            }
+        }
+
+        rtmr0_log.append(&mut vec![
             measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "SecureBoot", None)?,
             measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "PK", None)?,
             measure_tdx_efi_variable("8BE4DF61-93CA-11D2-AA0D-00E098032B8C", "KEK", None)?,
@@ -330,7 +348,7 @@ impl<'a> Tdvf<'a> {
             acpi_rsdp_hash,
             acpi_tables_hash,
             measure_sha384(&boot_order_data), // Always measure BootOrder itself
-        ];
+        ]);
 
         if machine.direct_boot {
             for boot_data in direct_boot_boot_variable_payloads(machine.ovmf_version)? {
@@ -570,5 +588,22 @@ mod tests {
                 "OVMF version mismatch for {version:?}"
             );
         }
+    }
+
+    // The threshold is (2025, 5); 2025.02 must not trigger fw_cfg measurement.
+    #[test]
+    fn fw_cfg_version_boundary_is_exactly_2025_05() {
+        assert!(!ovmf_exposes_fw_cfg_measurement(crate::parse_ovmf_version(
+            "edk2-stable202502"
+        )));
+        assert!(ovmf_exposes_fw_cfg_measurement(crate::parse_ovmf_version(
+            "edk2-stable202505"
+        )));
+        assert!(ovmf_exposes_fw_cfg_measurement(crate::parse_ovmf_version(
+            "2025.11-3ubuntu7"
+        )));
+        assert!(!ovmf_exposes_fw_cfg_measurement(crate::parse_ovmf_version(
+            ""
+        )));
     }
 }
