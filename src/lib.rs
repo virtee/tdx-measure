@@ -34,6 +34,9 @@ pub const OVMF_FW_CFG_VERSION: (u16, u8) = (2025, 5);
 /// The upstream release that introduced SMBIOS table measurement into RTMR0.
 pub const OVMF_SMBIOS_VERSION: (u16, u8) = (2025, 5);
 
+/// The upstream release that changed initrd command-line ordering.
+pub const OVMF_INITRD_PREFIX_VERSION: (u16, u8) = (2025, 8);
+
 /// Package metadata for a single supported distribution.
 pub struct DistributionDef {
     pub name: &'static str,

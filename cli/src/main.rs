@@ -69,8 +69,7 @@ struct Cli {
     /// Boot#### entries: upstream OVMF 2025.05 and later measure two EV_EFI_VARIABLE_BOOT events into RTMR0.
     /// fw_cfg measurement: upstream OVMF 2025.05 and later add EV_PLATFORM_CONFIG_FLAGS events for FW_CFG.BootMenu and FW_CFG.bootorder into RTMR0.
     /// SMBIOS measurement: upstream OVMF 2025.05 and later add EV_EFI_HANDOFF_TABLES for the SMBIOS table into RTMR0.
-    /// Planned independent uses (not yet integrated):
-    ///   - initrd cmdline ordering: upstream OVMF 2025.08 and later prefix "initrd=initrd" rather than appending.
+    /// Determines initrd cmdline ordering: upstream OVMF 2025.08 and later prefix "initrd=initrd" rather than appending.
     #[arg(long)]
     ovmf_version: Option<String>,
 
@@ -388,6 +387,15 @@ fn process_measurements(config: &Cli, image_config: &ImageConfig) -> Result<()> 
 
     if !error_msgs.is_empty() {
         return Err(anyhow!(error_msgs.trim_end().to_owned()));
+    }
+
+    // Direct boot measurement requires --distribution or --ovmf-version.
+    if direct_boot && !config.platform_only && distribution.is_none() && ovmf_version.is_none() {
+        return Err(anyhow!(
+            "--distribution or --ovmf-version is required for direct boot measurement. \
+             Supported distributions: {}",
+            SUPPORTED_DISTRIBUTIONS.join(", ")
+        ));
     }
 
     let machine = path_resolver.build_machine(

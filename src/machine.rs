@@ -70,9 +70,13 @@ impl Machine<'_> {
                 .initrd
                 .ok_or_else(|| anyhow::anyhow!("Initrd path required for direct boot"))?;
 
+            let ovmf_version = self.ovmf_version.ok_or_else(|| {
+                anyhow::anyhow!("OVMF version required for direct boot RTMR2 measurement")
+            })?;
+
             rtmr1 =
                 kernel::measure_rtmr1_direct(kernel_path, initrd_path, self.memory_size, 0x28000)?;
-            rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline)?;
+            rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline, ovmf_version)?;
         } else {
             // Indirect boot
             let qcow2_path = self
@@ -133,9 +137,13 @@ impl Machine<'_> {
                 .initrd
                 .ok_or_else(|| anyhow::anyhow!("Initrd path required for direct boot"))?;
 
+            let ovmf_version = self.ovmf_version.ok_or_else(|| {
+                anyhow::anyhow!("OVMF version required for direct boot RTMR2 measurement")
+            })?;
+
             // WARN : Carefull, when measuring the runtime only, we only compute the measurement for memory size > 0xb0000000
             rtmr1 = kernel::measure_rtmr1_direct(kernel_path, initrd_path, 0xb0000000, 0x28000)?;
-            rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline)?;
+            rtmr2 = kernel::measure_rtmr2_direct(initrd_path, self.kernel_cmdline, ovmf_version)?;
         } else {
             // Indirect boot
             let qcow2_path = self
