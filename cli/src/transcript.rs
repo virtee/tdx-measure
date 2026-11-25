@@ -1027,6 +1027,7 @@ mod tests {
             table_loader: None,
             boot_order: None,
             path_boot_xxxx: None,
+            smbios: None,
             kernel: None,
             initrd: None,
             qcow2: None,

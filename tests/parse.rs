@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tdx_measure::{parse_ovmf_version, ImageConfig, Machine};
+use tdx_measure::{ovmf_exposes_smbios_measurement, parse_ovmf_version, ImageConfig, Machine};
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -22,6 +22,16 @@ fn fixtures_dir() -> PathBuf {
 
 fn ovmf_path() -> PathBuf {
     fixtures_dir().join("OVMF.fd")
+}
+
+/// The OVMF version string to pass to `Machine::builder().ovmf_version(...)` for a given fixture.
+/// `upstream-edk2-<YYYYMM>` fixtures pin their own versioned firmware built from the matching `edk2-stableYYYYMM` tag (see tests/fixtures/README.md).
+/// Every other fixture uses the shared `OVMF.fd`, built from the Ubuntu `2025.02-3ubuntu2.2` package pinned in tests/fetch_ovmf.sh.
+fn ovmf_version_for_fixture(name: &str) -> String {
+    match name.strip_prefix("upstream-edk2-") {
+        Some(suffix) => format!("edk2-stable{suffix}"),
+        None => "2025.02-3ubuntu2.2".to_string(),
+    }
 }
 
 /// Returns each `<fixture>/` under `tests/fixtures/` that ships a
@@ -86,6 +96,19 @@ fn measure_platform_matches_expected_json_for_every_fixture() {
 
         let bios_str = bios.display().to_string();
         let acpi_str = acpi.display().to_string();
+        let ovmf_version = ovmf_version_for_fixture(&name);
+        let ovmf_version = parse_ovmf_version(&ovmf_version)
+            .unwrap_or_else(|| panic!("invalid ovmf version for {name}: {ovmf_version}"));
+
+        // Upstream OVMF only measures SMBIOS from 2025.05 onward; resolve the fixture's smbios path the same way the CLI does, so fixtures that predate SMBIOS measurement still succeed without one.
+        let smbios_str = ovmf_exposes_smbios_measurement(Some(ovmf_version))
+            .then(|| {
+                bc.smbios
+                    .as_ref()
+                    .map(|p| parent.join(p).display().to_string())
+            })
+            .flatten();
+
         let machine = Machine::builder()
             .cpu_count(bc.cpus)
             .memory_size(cfg.memory_size().expect("memory_size"))
@@ -96,6 +119,7 @@ fn measure_platform_matches_expected_json_for_every_fixture() {
             .table_loader("")
             .boot_order("")
             .path_boot_xxxx("")
+            .maybe_smbios(smbios_str.as_deref())
             .kernel("/dev/null")
             .initrd("/dev/null")
             .qcow2("")
@@ -107,7 +131,7 @@ fn measure_platform_matches_expected_json_for_every_fixture() {
             .metadata_path(&metadata_path)
             .create_acpi_table(false)
             .distribution("")
-            .ovmf_version(parse_ovmf_version("2025.02-3ubuntu2.2").expect("invalid ovmf version"))
+            .ovmf_version(ovmf_version)
             .build();
 
         let m = machine

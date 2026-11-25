@@ -25,6 +25,7 @@ pub struct Machine<'a> {
     pub table_loader: &'a str,
     pub boot_order: &'a str,
     pub path_boot_xxxx: &'a str,
+    pub smbios: Option<&'a str>,
     pub mok_list: Option<&'a str>,
     pub mok_list_trusted: Option<&'a str>,
     pub mok_list_x: Option<&'a str>,

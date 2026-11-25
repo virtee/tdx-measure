@@ -5,6 +5,32 @@ import os
 import sys
 import struct
 
+
+def extract_smbios_table(output_file):
+    """Extract the raw SMBIOS structure table from the TD.
+
+    The raw table is written as-is.
+    """
+    source_path = "/sys/firmware/dmi/tables/DMI"
+    if not os.path.exists(source_path):
+        print(f"Error: SMBIOS tables not found at {source_path}")
+        return False
+
+    try:
+        with open(source_path, 'rb') as f:
+            raw = f.read()
+
+        with open(output_file, 'wb') as f:
+            f.write(raw)
+
+        print(f"Extracted raw SMBIOS tables: {len(raw)} bytes -> {output_file}")
+        return True
+
+    except Exception as e:
+        print(f"Error extracting SMBIOS tables: {e}")
+        return False
+
+
 def extract_boot_variable(var_name, output_file):
     efi_var_path = f"/sys/firmware/efi/efivars/{var_name}-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 
@@ -150,6 +176,12 @@ def main():
     for source_path, output_file, description in acpi_extractions:
         extract_acpi_data(source_path, output_file, description)
 
+    print("\nExtracting raw SMBIOS data...")
+
+    # SMBIOS table data is exposed by Linux at /sys/firmware/dmi/tables/DMI.
+    # The raw table is extracted here.
+    extract_smbios_table("smbios_tables.bin")
+
     print("\nDone!")
     print("\nFiles created:")
 
@@ -172,6 +204,11 @@ def main():
         if os.path.exists(output_file):
             size = os.path.getsize(output_file)
             print(f"  {output_file}: {size} bytes")
+
+    # Show SMBIOS files.
+    if os.path.exists("smbios_tables.bin"):
+        size = os.path.getsize("smbios_tables.bin")
+        print(f"  smbios_tables.bin: {size} bytes")
 
 if __name__ == "__main__":
     main()

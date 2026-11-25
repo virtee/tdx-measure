@@ -20,20 +20,25 @@ tests/fixtures/
 ├── upstream-edk2-202502/
 │   ├── OVMF-edk2-stable202502.fd # versioned firmware; built locally, not committed
 │   └── … (same layout)
+├── upstream-edk2-202505/
+│   ├── OVMF-edk2-stable202505.fd # versioned firmware; built locally, not committed
+│   ├── smbios_tables.bin         # SMBIOS table blob measured into RTMR0; committed
+│   └── … (same layout)
 └── README.md                    # (this file)
 ```
 
 `metadata.json` is the fixture input.
-During integration tests, paths in `boot_config.bios` and `boot_config.acpi_tables` are resolved relative to the fixture directory.
+During integration tests, paths in `boot_config.bios`, `boot_config.acpi_tables`, and `boot_config.smbios` are resolved relative to the fixture directory.
 The shared `tests/fixtures/OVMF.fd` file is downloaded by `tests/fetch_ovmf.sh` from the pinned Ubuntu OVMF package.
 It is intentionally not committed to the repository.
-The `upstream-edk2-202502` fixture uses a separate firmware file, `OVMF-edk2-stable202502.fd`.
-`tests/fetch_ovmf.sh` builds this file with `tests/Dockerfile.edk2-ovmf-build` from the pinned EDK2 `edk2-stable202502` commit.
+The `upstream-edk2-202502` and `upstream-edk2-202505` fixtures each use their own versioned firmware file, `OVMF-edk2-stable202502.fd` and `OVMF-edk2-stable202505.fd` respectively.
+`tests/fetch_ovmf.sh` builds these files with `tests/Dockerfile.edk2-ovmf-build` from the pinned EDK2 commit.
 The build also pins its Ubuntu package snapshot and Debian patch archive, and verifies the resulting firmware SHA-256 digest.
-Both firmware files are local test prerequisites.
+All firmware files are local test prerequisites.
 They are created or validated by `tests/fetch_ovmf.sh`.
 The test suite does not build them automatically.
 Run that script once after checking out the repository, or again whenever its pinned inputs change.
+Upstream OVMF only measures the SMBIOS table into RTMR0 from `edk2-stable202505` onward, so only the `upstream-edk2-202505` fixture sets `boot_config.smbios`; its `smbios_tables.bin` is committed since it isn't built by `tests/fetch_ovmf.sh`.
 
 `acpi_tables.bin` and `expected.json` are the captured ground truth. They
 should change only when the underlying QEMU pin in `src/acpi.rs` changes, or
@@ -62,8 +67,9 @@ in `acpi_tables.bin` came from:
 |---|---|---|
 | `canonical-defaults` | tool-generated | The Canonical direct-boot args used when no `boot_config.qemu` block is present (`hpet=off,smm=off,pic=off`, `-cpu host -accel kvm`). Pins the Canonical-defaults reference RTMR0. |
 | `q35-with-hpet` | tool-generated | A generic q35 with HPET on, a handful of `virtio-*-pci` devices, and `accel: "tcg"` so the regen test runs without KVM. Exercises the larger-table-set path of `derive_table_loader` (HPET adds an extra `AddChecksum` + an extra RSDT pointer). |
-| `runtime-capture` | runtime-captured | Bytes extracted from a live TDX guest (Tinfoil cvmimage, 8 vCPU / 16 GiB, q35 with HPET and a typical set of `virtio-scsi` / `e1000` / `vhost-vsock` devices). The regen test against this fixture is the only one that catches drift between our patched-QEMU dumper and what an actual TD exposes at runtime. |
+| `runtime-capture` | runtime-captured | Bytes extracted from a live Intel TDX guest (Tinfoil cvmimage, 8 vCPU / 16 GiB, q35 with HPET and a typical set of `virtio-scsi` / `e1000` / `vhost-vsock` devices). The regen test against this fixture is the only one that catches drift between our patched-QEMU dumper and what an actual TD exposes at runtime. |
 | `upstream-edk2-202502` | runtime-captured | Bytes extracted from a live Intel TDX guest (32 vCPU / 16 GiB, q35 with `kernel_irqchip=split`) booted with `-bios OVMF-edk2-stable202502.fd`; see `SOURCE-OF-TRUTH.md` for the exact QEMU command. `acpi_tables.bin` was extracted in-guest via `extract_config_files.py`. Exercises MRTD/CFV measurement against a real OVMF binary built from upstream EDK2. |
+| `upstream-edk2-202505` | runtime-captured | Bytes extracted from a live Intel TDX guest (32 vCPU / 16 GiB, q35 with `kernel_irqchip=split`) booted with `-bios OVMF-edk2-stable202505.fd`; see `SOURCE-OF-TRUTH.md` for the exact QEMU command. `acpi_tables.bin` and `smbios_tables.bin` were both extracted in-guest via `extract_config_files.py`. `edk2-stable202505` is the first upstream release that measures the SMBIOS table into RTMR0, registers two direct-boot entries (`Boot0000` BootManagerMenuApp + `Boot0001` EFI Firmware Setup) instead of one, and measures the fw_cfg `BootMenu`/`bootorder` items into RTMR0, so this fixture is the only one exercising all three of those measurement paths for direct boot. |
 
 Adding a new tool-generated fixture: `mkdir tests/fixtures/<name>/` + a new
 `metadata.json`, then `tests/regen_fixtures.sh` populates the rest.

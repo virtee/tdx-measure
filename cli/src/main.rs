@@ -68,9 +68,9 @@ struct Cli {
     /// Select or override the OVMF version (accepted: edk2-stableYYYYMM or YYYY.MM-NubuntuN[.N]).
     /// Boot#### entries: upstream OVMF 2025.05 and later measure two EV_EFI_VARIABLE_BOOT events into RTMR0.
     /// fw_cfg measurement: upstream OVMF 2025.05 and later add EV_PLATFORM_CONFIG_FLAGS events for FW_CFG.BootMenu and FW_CFG.bootorder into RTMR0.
+    /// SMBIOS measurement: upstream OVMF 2025.05 and later add EV_EFI_HANDOFF_TABLES for the SMBIOS table into RTMR0.
     /// Planned independent uses (not yet integrated):
     ///   - initrd cmdline ordering: upstream OVMF 2025.08 and later prefix "initrd=initrd" rather than appending.
-    ///   - SMBIOS measurement: upstream OVMF 2025.05 and later add EV_EFI_HANDOFF_TABLES for the SMBIOS table into RTMR0.
     #[arg(long)]
     ovmf_version: Option<String>,
 
@@ -95,6 +95,7 @@ struct PathStorage {
     table_loader: Option<String>,
     boot_order: Option<String>,
     path_boot_xxxx: Option<String>,
+    smbios: Option<String>,
     // Direct boot specific
     kernel: Option<String>,
     initrd: Option<String>,
@@ -141,6 +142,10 @@ impl PathResolver {
                     .path_boot_xxxx
                     .as_ref()
                     .map(|p| parent_dir.join(p).display().to_string()),
+                smbios: boot_config
+                    .smbios
+                    .as_ref()
+                    .map(|p| parent_dir.join(p).display().to_string()),
                 kernel: image_config
                     .direct_boot()
                     .map(|d| parent_dir.join(&d.kernel).display().to_string()),
@@ -180,6 +185,7 @@ impl PathResolver {
                 table_loader: None,
                 boot_order: None,
                 path_boot_xxxx: None,
+                smbios: None,
                 kernel: image_config
                     .direct_boot()
                     .map(|d| parent_dir.join(&d.kernel).display().to_string()),
@@ -226,6 +232,7 @@ impl PathResolver {
             .table_loader(self.paths.table_loader.as_deref().unwrap_or(""))
             .boot_order(self.paths.boot_order.as_deref().unwrap_or(""))
             .path_boot_xxxx(self.paths.path_boot_xxxx.as_deref().unwrap_or(""))
+            .maybe_smbios(self.paths.smbios.as_deref())
             .kernel(self.paths.kernel.as_deref().unwrap_or(""))
             .initrd(self.paths.initrd.as_deref().unwrap_or(""))
             .qcow2(self.paths.qcow2.as_deref().unwrap_or(""))

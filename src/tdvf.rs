@@ -9,7 +9,7 @@ use sha2::{Digest, Sha384};
 
 use crate::num::read_le;
 use crate::util::{debug_print_log, measure_log, measure_sha384, read_file_data, utf16_encode};
-use crate::{Machine, OVMF_BOOT_EVENTS_VERSION};
+use crate::{Machine, OVMF_BOOT_EVENTS_VERSION, OVMF_SMBIOS_VERSION};
 
 const PAGE_SIZE: u64 = 0x1000;
 const MR_EXTEND_GRANULARITY: usize = 0x100;
@@ -101,6 +101,33 @@ fn ovmf_exposes_single_boot_entry(ovmf_version: Option<(u16, u8)>) -> bool {
 /// OVMF releases from upstream 2025.05 onward measure the fw_cfg BootMenu and bootorder items into RTMR0.
 fn ovmf_exposes_fw_cfg_measurement(ovmf_version: Option<(u16, u8)>) -> bool {
     matches!(ovmf_version, Some(version) if version >= crate::OVMF_FW_CFG_VERSION)
+}
+
+/// OVMF releases from upstream 2025.05 onward measure the SMBIOS table into RTMR0.
+pub fn ovmf_exposes_smbios_measurement(ovmf_version: Option<(u16, u8)>) -> bool {
+    matches!(ovmf_version, Some(version) if version >= OVMF_SMBIOS_VERSION)
+}
+
+/// Returns the RTMR0 digest of the filtered SMBIOS table, or `None` if this OVMF version doesn't measure it.
+/// Errors if the OVMF version requires it but no `smbios` path was provided in metadata.json.
+fn measure_smbios(machine: &Machine) -> Result<Option<Vec<u8>>> {
+    if !ovmf_exposes_smbios_measurement(machine.ovmf_version) {
+        return Ok(None);
+    }
+
+    match machine.smbios {
+        Some(smbios_path) => {
+            let raw = read_file_data(smbios_path)?;
+            // SmbiosMeasurementDxe blanks volatile fields before hashing; reproduce that filter to match the TD event log digest.
+            let filtered = crate::smbios::filter_smbios_table(&raw);
+            Ok(Some(measure_sha384(&filtered)))
+        }
+        None => {
+            let (major, minor) = machine.ovmf_version.unwrap_or_default();
+            bail!(
+                "The used OVMF version {major}.{minor:02} measures SMBIOS but path to smbios binary was not provided in metadata.json");
+        }
+    }
 }
 
 /// Returns the BootOrder variable bytes OVMF creates for direct boot.
@@ -323,9 +350,6 @@ impl<'a> Tdvf<'a> {
         let acpi_rsdp_hash = measure_sha384(&tables.rsdp);
         let acpi_loader_hash = measure_sha384(&tables.loader);
 
-        // Load boot order data and entries
-        let (boot_order_data, boot_entries) = parse_boot_order(machine)?;
-
         // Compute RTMR0 log
         let mut rtmr0_log = vec![td_hob_hash, cfv_hash];
 
@@ -347,8 +371,16 @@ impl<'a> Tdvf<'a> {
             acpi_loader_hash,
             acpi_rsdp_hash,
             acpi_tables_hash,
-            measure_sha384(&boot_order_data), // Always measure BootOrder itself
         ]);
+
+        if let Some(smbios_hash) = measure_smbios(machine)? {
+            rtmr0_log.push(smbios_hash);
+        }
+
+        // Load boot order data and entries
+        let (boot_order_data, boot_entries) = parse_boot_order(machine)?;
+
+        rtmr0_log.push(measure_sha384(&boot_order_data));
 
         if machine.direct_boot {
             for boot_data in direct_boot_boot_variable_payloads(machine.ovmf_version)? {
@@ -605,5 +637,66 @@ mod tests {
         assert!(!ovmf_exposes_fw_cfg_measurement(crate::parse_ovmf_version(
             ""
         )));
+    }
+
+    // The threshold is (2025, 05); 2025.02 must not trigger SMBIOS measurement.
+    #[test]
+    fn smbios_version_boundary_is_exactly_2025_05() {
+        assert!(!ovmf_exposes_smbios_measurement(crate::parse_ovmf_version(
+            "edk2-stable202502"
+        )));
+        assert!(ovmf_exposes_smbios_measurement(crate::parse_ovmf_version(
+            "edk2-stable202505"
+        )));
+        assert!(ovmf_exposes_smbios_measurement(crate::parse_ovmf_version(
+            "2025.11-3ubuntu7"
+        )));
+        assert!(!ovmf_exposes_smbios_measurement(None));
+    }
+
+    #[test]
+    fn measure_smbios_returns_none_when_ovmf_predates_measurement() {
+        let m = dummy_machine(Some("edk2-stable202502"));
+        assert!(measure_smbios(&m).unwrap().is_none());
+    }
+
+    #[test]
+    fn measure_smbios_errors_when_required_but_missing() {
+        let m = dummy_machine(Some("edk2-stable202505"));
+        let err = measure_smbios(&m).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("path to smbios binary was not provided in metadata.json"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // A configured but unreadable smbios path must propagate as an Error.
+    #[test]
+    fn measure_smbios_propagates_read_error_for_missing_file() {
+        let m = Machine::builder()
+            .cpu_count(4)
+            .memory_size(0x80000000)
+            .firmware("")
+            .kernel_cmdline("")
+            .acpi_tables("")
+            .rsdp("")
+            .table_loader("")
+            .boot_order("")
+            .path_boot_xxxx("")
+            .maybe_smbios(Some("/nonexistent/path/smbios.bin"))
+            .direct_boot(true)
+            .metadata_path(std::path::Path::new(""))
+            .create_acpi_table(false)
+            .distribution("")
+            .maybe_ovmf_version(crate::parse_ovmf_version("edk2-stable202505"))
+            .build();
+
+        let err = measure_smbios(&m).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to load file /nonexistent/path/smbios.bin"),
+            "unexpected error: {err}"
+        );
     }
 }
