@@ -7,6 +7,8 @@
 //! No Docker or KVM required.
 
 use super::helpers::run;
+use super::helpers::run_full;
+use super::helpers::run_runtime_only;
 
 /// An unrecognized OVMF version is rejected with a clear error.
 #[test]
@@ -84,5 +86,43 @@ fn invalid_ovmf_version_override_is_not_masked_by_distribution_default() {
     assert!(
         stderr.contains("is invalid"),
         "stderr missing rejection message: {stderr}",
+    );
+}
+
+/// Running --runtime-only without --ovmf-version or --distribution fails because the OVMF version is required to determine initrd cmdline ordering.
+#[test]
+fn missing_ovmf_version_in_runtime_mode_is_rejected() {
+    let out = run_runtime_only(&[]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "expected failure without --ovmf-version; stderr: {stderr}",
+    );
+}
+
+/// Full direct boot measurement (RTMR1 + RTMR2) without --ovmf-version or --distribution fails.
+#[test]
+fn full_measurement_without_ovmf_version_is_rejected() {
+    let out = run_full(&[]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "expected failure without --ovmf-version for full measurement; stderr: {stderr}",
+    );
+}
+
+/// Running --platform-only without --ovmf-version or --distribution is rejected.
+/// RTMR0 boot entries differ by OVMF version, so the version is always required for direct boot.
+#[test]
+fn platform_only_without_ovmf_version_is_rejected() {
+    let out: std::process::Output = run(&[]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "expected failure without --ovmf-version for platform-only direct boot; stderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("OVMF version is required"),
+        "stderr missing OVMF requirement message: {stderr}",
     );
 }

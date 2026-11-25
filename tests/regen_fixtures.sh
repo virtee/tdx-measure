@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regenerate `acpi_tables.bin` + `expected.json` for every fixture under
 # tests/fixtures/. Run this when:
-#   - the QEMU pin in src/acpi.rs is bumped, or
+#   - the QEMU pin in src/lib.rs is bumped, or
 #   - a fixture's metadata.json is edited.
 #
 # Bytes are checked into the repo so `cargo test --release --test parse` doesn't
@@ -49,6 +49,15 @@ distro_for() {
     esac
 }
 
+# `upstream-edk2-<YYYYMM>` fixtures pin their own versioned firmware built from the matching `edk2-stableYYYYMM` tag (see tests/fixtures/README.md).
+# Every other fixture uses the shared OVMF.fd, built from the Ubuntu `2025.02-3ubuntu2.2` package pinned in tests/fetch_ovmf.sh.
+ovmf_version_for() {
+    case "$1" in
+        upstream-edk2-*) echo "edk2-stable${1#upstream-edk2-}" ;;
+        *)               echo "2025.02-3ubuntu2.2" ;;
+    esac
+}
+
 declare -i ok=0 fail=0
 for dir in "$fixtures"/*/; do
     name="$(basename "$dir")"
@@ -62,6 +71,9 @@ for dir in "$fixtures"/*/; do
         continue
     fi
 
+    distro="$(distro_for "$name")"
+    ovmf_version="$(ovmf_version_for "$name")"
+
     # A fixture whose `acpi_tables.bin` came from a live TD (via
     # `extract_config_files.py`) ships a `SOURCE-OF-TRUTH.md`. Those bytes are
     # the authoritative reference for the dumper round-trip, so we never
@@ -69,19 +81,19 @@ for dir in "$fixtures"/*/; do
     if [[ -f "$dir/SOURCE-OF-TRUTH.md" ]]; then
         echo "=== $name (runtime-captured; preserving acpi_tables.bin) ==="
         rm -f "$dir/expected.json"
-        "$tdx_measure" "$dir/metadata.json" --platform-only --json 2>/dev/null \
+        "$tdx_measure" "$dir/metadata.json" --platform-only --json \
+            --distribution "$distro" --ovmf-version "$ovmf_version" 2>/dev/null \
             > "$dir/expected.json"
         ok+=1
         continue
     fi
 
     echo "=== $name ==="
-    distro="$(distro_for "$name")"
     rm -f "$dir/acpi_tables.bin" "$dir/expected.json"
 
     if ! "$tdx_measure" "$dir/metadata.json" \
             --platform-only --direct-boot true \
-            --distribution "$distro" \
+            --distribution "$distro" --ovmf-version "$ovmf_version" \
             --create-acpi-tables >/dev/null; then
         echo "FAIL $name: --create-acpi-tables failed"
         fail+=1
@@ -90,7 +102,8 @@ for dir in "$fixtures"/*/; do
 
     # `--platform-only --json` runs the measurement pipeline and prints the
     # JSON result to stdout (logs go to stderr).
-    "$tdx_measure" "$dir/metadata.json" --platform-only --json 2>/dev/null \
+    "$tdx_measure" "$dir/metadata.json" --platform-only --json \
+        --distribution "$distro" --ovmf-version "$ovmf_version" 2>/dev/null \
         > "$dir/expected.json"
     ok+=1
 done

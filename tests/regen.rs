@@ -65,6 +65,15 @@ fn host_has_kvm() -> bool {
     Path::new("/dev/kvm").exists()
 }
 
+/// `upstream-edk2-<YYYYMM>` fixtures pin their own versioned firmware built from the matching `edk2-stableYYYYMM` tag (see tests/fixtures/README.md).
+/// Every other fixture uses the shared `OVMF.fd`, built from the Ubuntu `2025.02-3ubuntu2.2` package pinned in tests/fetch_ovmf.sh.
+fn ovmf_version_for_fixture(name: &str) -> String {
+    match name.strip_prefix("upstream-edk2-") {
+        Some(suffix) => format!("edk2-stable{suffix}"),
+        None => "2025.02-3ubuntu2.2".to_string(),
+    }
+}
+
 #[test]
 #[ignore = "needs Docker + buildx + several minutes; run with --ignored"]
 fn create_acpi_tables_reproduces_each_fixture_byte_for_byte() {
@@ -98,10 +107,18 @@ fn create_acpi_tables_reproduces_each_fixture_byte_for_byte() {
             "ubuntu:26.04"
         };
 
+        let ovmf_version = ovmf_version_for_fixture(&name);
+
         let status = Command::new(&cli)
             .arg(fixture.join("metadata.json"))
             .args(["--platform-only", "--direct-boot", "true"])
-            .args(["--distribution", distro, "--create-acpi-tables"])
+            .args([
+                "--distribution",
+                distro,
+                "--ovmf-version",
+                &ovmf_version,
+                "--create-acpi-tables",
+            ])
             .status();
 
         // Always restore the captured copy, even on error.

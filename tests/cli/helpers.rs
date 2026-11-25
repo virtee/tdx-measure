@@ -47,3 +47,24 @@ pub fn run(args: &[&str]) -> Output {
         .output()
         .expect("spawn tdx-measure")
 }
+
+/// Run the CLI with `--direct-boot true` (no `--platform-only`) plus additional args.
+/// Used to test validation paths that only fire during full measurement.
+pub fn run_full(args: &[&str]) -> Output {
+    Command::new(cli())
+        .arg(direct_boot_metadata())
+        .args(["--direct-boot", "true"])
+        .args(args)
+        .output()
+        .expect("spawn tdx-measure")
+}
+
+/// Run the CLI with `--runtime-only --direct-boot true` plus additional args.
+pub fn run_runtime_only(args: &[&str]) -> Output {
+    Command::new(cli())
+        .arg(direct_boot_metadata())
+        .args(["--runtime-only", "--direct-boot", "true"])
+        .args(args)
+        .output()
+        .expect("spawn tdx-measure")
+}

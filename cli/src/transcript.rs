@@ -17,6 +17,7 @@ pub fn generate_transcript(
     direct_boot: bool,
     platform_only: bool,
     runtime_only: bool,
+    ovmf_version: Option<(u16, u8)>,
 ) -> Result<()> {
     let mut output = Vec::new();
 
@@ -29,7 +30,7 @@ pub fn generate_transcript(
         write_acpi_tables_with_iasl(&mut output, &path_resolver.paths.acpi_tables)?;
 
         // Display boot order and boot variables
-        write_boot_variables(&mut output, &path_resolver.paths, direct_boot)?;
+        write_boot_variables(&mut output, &path_resolver.paths, direct_boot, ovmf_version)?;
     }
 
     if !platform_only {
@@ -716,6 +717,7 @@ fn write_boot_variables(
     output: &mut Vec<u8>,
     paths: &PathStorage,
     direct_boot: bool,
+    ovmf_version: Option<(u16, u8)>,
 ) -> Result<()> {
     writeln!(output, "=== Boot Variables ===").unwrap();
     writeln!(
@@ -735,15 +737,17 @@ fn write_boot_variables(
         output,
         &paths.boot_order.as_deref().unwrap_or(""),
         direct_boot,
+        ovmf_version,
     )?;
 
     // Parse and display Boot#### variables
 
     if direct_boot {
-        // Boot0000 data for direct boot mode
-        let boot0000_hex = "090100002c0055006900410070007000000004071400c9bdb87cebf8344faaea3ee4af6516a10406140021aa2c4614760345836e8ab6f46623317fff0400";
-        let boot0000 = hex::decode(boot0000_hex).context("Failed to decode boot0000 hex string")?;
-        write_boot_option_analysis(output, "Boot0000", &boot0000)?;
+        // Use the same OVMF-version-dependent payloads that are measured into RTMR0.
+        let payloads = tdx_measure::direct_boot_boot_variable_payloads(ovmf_version)?;
+        for (boot_entry, data) in boot_entries.iter().zip(payloads.iter()) {
+            write_boot_option_analysis(output, &format!("Boot{:04X}", boot_entry), data)?;
+        }
     } else {
         for boot_entry in boot_entries {
             let name = format!("Boot{:04X}", boot_entry);
@@ -766,11 +770,12 @@ fn write_boot_order_analysis(
     output: &mut Vec<u8>,
     boot_order_path: &str,
     direct_boot: bool,
+    ovmf_version: Option<(u16, u8)>,
 ) -> Result<Vec<u16>> {
     writeln!(output, "--- BootOrder Analysis ---").unwrap();
 
     let data = if direct_boot {
-        vec![0, 0]
+        tdx_measure::direct_boot_boot_order_bytes(ovmf_version)
     } else {
         fs::read(boot_order_path)
             .with_context(|| format!("Failed to read BootOrder from {}", boot_order_path))?
@@ -1005,4 +1010,103 @@ fn write_raw_hex_dump(output: &mut Vec<u8>, data: &[u8], name: &str) -> Result<(
 
     writeln!(output).unwrap();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_paths() -> PathStorage {
+        PathStorage {
+            cpu_count: 0,
+            memory_size: 0,
+            firmware: String::new(),
+            cmdline: String::new(),
+            acpi_tables: String::new(),
+            rsdp: None,
+            table_loader: None,
+            boot_order: None,
+            path_boot_xxxx: None,
+            kernel: None,
+            initrd: None,
+            qcow2: None,
+            mok_list: None,
+            mok_list_trusted: None,
+            mok_list_x: None,
+            sbat_level: None,
+        }
+    }
+
+    fn direct_boot_transcript(ovmf_version: Option<(u16, u8)>) -> String {
+        let mut output = Vec::new();
+        write_boot_variables(&mut output, &empty_paths(), true, ovmf_version).unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    fn boot_entry_sections(transcript: &str) -> Vec<&str> {
+        transcript
+            .split("\n--- ")
+            .filter(|section| section.starts_with("Boot") && !section.starts_with("BootOrder "))
+            .collect()
+    }
+
+    #[test]
+    fn direct_boot_transcript_shows_two_boot_entries_for_ovmf_2025_05_and_later() {
+        for version in [(2025, 5), (2025, 8), (2025, 11)] {
+            let transcript = direct_boot_transcript(Some(version));
+
+            assert!(
+                transcript.contains("BootOrder contains 2 entries:"),
+                "OVMF {version:?}: {transcript}"
+            );
+            assert!(
+                transcript.contains("Boot preference order: Boot0000 -> Boot0001\n"),
+                "OVMF {version:?}: {transcript}"
+            );
+
+            let sections = boot_entry_sections(&transcript);
+            assert_eq!(sections.len(), 2, "OVMF {version:?}: {transcript}");
+            for (section, (header, description)) in sections.iter().zip([
+                ("Boot0000 Analysis ---", "BootManagerMenuApp"),
+                ("Boot0001 Analysis ---", "EFI Firmware Setup"),
+            ]) {
+                assert_eq!(
+                    section.lines().next(),
+                    Some(header),
+                    "OVMF {version:?}: {section}"
+                );
+                let descriptions: Vec<_> = section
+                    .lines()
+                    .filter(|line| line.starts_with("  Description: "))
+                    .collect();
+                assert_eq!(
+                    descriptions,
+                    vec![format!("  Description: \"{description}\"")],
+                    "OVMF {version:?}: {section}"
+                );
+            }
+            assert!(
+                !transcript.contains("Description: \"UiApp\""),
+                "OVMF {version:?}: {transcript}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_boot_transcript_shows_single_boot_entry_for_ovmf_2025_02() {
+        let transcript = direct_boot_transcript(Some((2025, 2)));
+
+        assert!(transcript.contains("BootOrder contains 1 entries:"));
+        assert!(transcript.contains("Boot preference order: Boot0000\n"));
+        let sections = boot_entry_sections(&transcript);
+        assert_eq!(sections.len(), 1, "{transcript}");
+        assert_eq!(sections[0].lines().next(), Some("Boot0000 Analysis ---"));
+        let descriptions: Vec<_> = sections[0]
+            .lines()
+            .filter(|line| line.starts_with("  Description: "))
+            .collect();
+        assert_eq!(descriptions, vec!["  Description: \"UiApp\""]);
+        assert!(!transcript.contains("Boot0001"));
+        assert!(!transcript.contains("BootManagerMenuApp"));
+    }
 }

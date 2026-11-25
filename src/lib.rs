@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
 
 pub use machine::{Machine, QemuInfo};
+pub use tdvf::{direct_boot_boot_order_bytes, direct_boot_boot_variable_payloads};
 
 use util::{measure_log, measure_sha384};
 
@@ -19,6 +20,9 @@ mod machine;
 mod num;
 mod tdvf;
 mod util;
+
+/// The upstream release that introduced the second direct-boot Boot#### event.
+pub const OVMF_BOOT_EVENTS_VERSION: (u16, u8) = (2025, 5);
 
 /// Package metadata for a single supported distribution.
 pub struct DistributionDef {
